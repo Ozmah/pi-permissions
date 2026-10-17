@@ -94,6 +94,12 @@ npm run check   # typecheck + tests
 pi -e ./        # try a local checkout without installing
 ```
 
+## Contributing
+
+Ok to use AI, just read your agent's crap and make sure it's good, or be forever banned if it looks vibed.
+
+`npm run check` must pass.
+
 ## License
 
 [MIT](LICENSE) © [Ozmah](https://ozmah.dev)
