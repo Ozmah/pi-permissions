@@ -1,0 +1,25 @@
+{
+  "default": "ask",
+  "tools": {
+    "read": "allow",
+    "ls": "allow",
+    "find": "allow",
+    "grep": "allow",
+    "edit": "ask",
+    "write": "ask"
+  },
+  "external_directory": {
+    "~/projects/*": "allow",
+    "*": "ask"
+  },
+  "bash": {
+    "git status *": "allow",
+    "git log *": "allow",
+    "git diff *": "allow",
+    "sudo *": "deny",
+    "*": "ask"
+  },
+  "ui": {
+    "position": "editor"
+  }
+}
