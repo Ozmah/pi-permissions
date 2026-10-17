@@ -16,7 +16,7 @@ import { type PermissionConfig, type PromptPosition, defaultConfig, mergeConfigs
 import { type MarkdownTheme, highlightMarkdown } from "./markdown.ts";
 import { decide, formatReason, resolvePath } from "./policy.ts";
 import { type CallTarget, type Grant, type GrantChoice, describeGrant, grantChoices, grantMatches } from "./grants.ts";
-import { type BodyLine, NO, PermissionPrompt, YES } from "./prompt-ui.ts";
+import { type BodyLine, NO, PermissionPrompt, TELL, YES } from "./prompt-ui.ts";
 import { readState, setDisabled, writeState } from "./state.ts";
 import { COMMANDS, SUMMARY_ENTRY, type Summary, renderSummary } from "./summary.ts";
 import { sanitize } from "./text.ts";
@@ -34,6 +34,8 @@ const FALLBACK_MAX_LINES = 40;
 
 const STATUS_KEY = "permissions";
 const DENIED_REASON = "The user denied this action. Do not retry it; ask the user how to proceed.";
+const toldReason = (text: string) =>
+	`The user denied this action and gave instructions instead:\n${text}\nFollow these instructions instead of retrying the same action.`;
 const USAGE = "Usage: /permissions [reset | off [--session] | on]";
 
 /** Pi's highlighter for code; Markdown uses Pi's `md*` colors, with fenced blocks back to Pi's highlighter. */
@@ -156,8 +158,9 @@ export default function (pi: ExtensionAPI) {
 		const body = buildBody(event.toolName, input, d.absPath, d.reasons, bodyDeps(ctx.ui.theme), d.requestedPath);
 		const choices = grantChoices(target);
 		const choice = await ask(ctx, `🔐 ${event.toolName} requires permission`, body, cfg.ui.position, choices);
-		if (choice === NO.key) return { block: true, reason: DENIED_REASON };
-		const granted = choices.find((c) => c.key === choice)?.grant;
+		if (choice.key === NO.key) return { block: true, reason: DENIED_REASON };
+		if (choice.key === TELL.key) return { block: true, reason: toldReason(choice.text ?? "") };
+		const granted = choices.find((c) => c.key === choice.key)?.grant;
 		if (granted) sessionGrants.push(granted);
 		return undefined;
 	});
@@ -251,33 +254,43 @@ const LAYOUTS = {
 	},
 } as const;
 
-/** Shows the prompt and resolves with the key of the chosen option (`YES.key`, `NO.key`, or a grant's key). */
+/** The chosen option's key (`YES.key`, `NO.key`, `TELL.key` or a grant's key), plus the text for TELL. */
+interface Answer {
+	key: string;
+	text?: string;
+}
+
+const DENY: Answer = { key: NO.key };
+
 async function ask(
 	ctx: ExtensionContext,
 	title: string,
 	body: BodyLine[],
 	position: PromptPosition,
 	choices: GrantChoice[],
-): Promise<string> {
+): Promise<Answer> {
 	if (ctx.mode !== "tui") {
-		const options = [YES, NO, ...choices];
+		const options = [YES, NO, TELL, ...choices];
 		const labels = options.map((o) => sanitize(o.label));
 		const picked = await ctx.ui.select(sanitize(`${title}\n\n${plainBody(body, FALLBACK_MAX_LINES)}`), labels);
-		return options[labels.indexOf(picked ?? "")]?.key ?? NO.key;
+		const key = options[labels.indexOf(picked ?? "")]?.key ?? NO.key;
+		if (key !== TELL.key) return { key };
+		const text = (await ctx.ui.input("Tell pi what to do instead", "what should pi do instead?"))?.trim();
+		return text ? { key, text } : DENY;
 	}
 
 	const signal = ctx.signal;
-	if (signal?.aborted) return NO.key;
+	if (signal?.aborted) return DENY;
 	const layout = LAYOUTS[position];
 
-	return ctx.ui.custom<string>(
+	return ctx.ui.custom<Answer>(
 		(tui, theme, _keybindings, done) => {
 			let finished = false;
-			const finish = (key: string) => {
+			const finish = (key: string, text?: string) => {
 				if (finished) return;
 				finished = true;
 				signal?.removeEventListener("abort", onAbort);
-				done(key);
+				done(text === undefined ? { key } : { key, text });
 			};
 			// An aborted agent run closes the prompt as a denial.
 			const onAbort = () => finish(NO.key);

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `t`: "No, tell pi what to do". Denies and sends one line of instructions to the agent, typed inside the prompt while the command stays visible.
 - Syntax highlighting with Pi's highlighter and theme: bash commands, `write` content, both sides of `edit` diffs. Diff signs keep their red/green.
 - Markdown files use Pi's Markdown colors (headings, code, links, bullets, quotes); fenced code blocks are highlighted in their own language.
 - `/permissions off` disables the extension for the current working directory (persistent); `/permissions off --session` until the session ends; `/permissions on` re-enables.

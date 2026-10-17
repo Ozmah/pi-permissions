@@ -5,8 +5,8 @@
  * options never scroll out of view, whatever the body length.
  */
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { Component, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { Input, Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import type { Component, Focusable, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { sanitize } from "./text.ts";
 
 /** An answer option. `key` is both its shortcut and the value the prompt resolves with. */
@@ -18,6 +18,8 @@ export interface PromptChoice {
 /** Always offered first: Enter on open means Yes. */
 export const YES: PromptChoice = { key: "y", label: "Yes" };
 export const NO: PromptChoice = { key: "n", label: "No" };
+/** Denies and opens a one-line input; the prompt resolves with the typed text. */
+export const TELL: PromptChoice = { key: "t", label: "No, tell pi what to do" };
 
 /** The subset of Pi's Theme the prompt uses. */
 export type PromptTheme = Pick<Theme, "fg" | "bg" | "bold">;
@@ -103,7 +105,7 @@ export function wrapPlain(text: string, width: number): string[] {
 	return out;
 }
 
-export class PermissionPrompt implements Component {
+export class PermissionPrompt implements Component, Focusable {
 	private scroll = 0;
 	private selected = 0; // "Yes"
 	private bodyHeight = 1;
@@ -114,7 +116,10 @@ export class PermissionPrompt implements Component {
 	private readonly body: BodyLine[];
 	private readonly maxHeightRatio: number;
 	private readonly choices: PromptChoice[];
-	private readonly done: (key: string) => void;
+	private readonly done: (key: string, text?: string) => void;
+	/** The "tell pi" input while it is open. */
+	private input: Input | undefined;
+	private isFocused = false;
 
 	constructor(
 		tui: TUI,
@@ -122,15 +127,47 @@ export class PermissionPrompt implements Component {
 		title: string,
 		body: BodyLine[],
 		options: PromptOptions,
-		done: (key: string) => void,
+		done: (key: string, text?: string) => void,
 	) {
 		this.tui = tui;
 		this.theme = theme;
 		this.title = title;
 		this.body = body;
 		this.maxHeightRatio = options.maxHeightRatio;
-		this.choices = [YES, NO, ...options.choices];
+		this.choices = [YES, NO, TELL, ...options.choices];
 		this.done = done;
+	}
+
+	/** Focus is passed to the input so the cursor and IME land in the right place. */
+	get focused(): boolean {
+		return this.isFocused;
+	}
+
+	set focused(value: boolean) {
+		this.isFocused = value;
+		if (this.input) this.input.focused = value;
+	}
+
+	private openInput(): void {
+		const input = new Input({ placeholder: "what should pi do instead?" });
+		input.focused = this.isFocused;
+		// Empty text is a plain No.
+		input.onSubmit = (value) => (value.trim() ? this.done(TELL.key, value.trim()) : this.done(NO.key));
+		this.input = input;
+		this.tui.requestRender();
+	}
+
+	private closeInput(): void {
+		this.input = undefined;
+		this.tui.requestRender();
+	}
+
+	/** The input row, padded to the inner width (not truncated: it carries the cursor marker). */
+	private inputRow(input: Input, inner: number): string {
+		const label = this.theme.fg("accent", "Tell pi: ");
+		const field = input.render(Math.max(1, inner - visibleWidth(label)))[0] ?? "";
+		const content = label + field;
+		return content + " ".repeat(Math.max(0, inner - visibleWidth(content)));
 	}
 
 	/** Option labels on one row when they fit, otherwise one per row. */
@@ -186,7 +223,7 @@ export class PermissionPrompt implements Component {
 		const inner = Math.max(10, width - 4);
 		const rows = this.wrapped(inner);
 
-		const options = this.optionRows(inner);
+		const options = this.input ? [this.inputRow(this.input, inner)] : this.optionRows(inner);
 		const chrome = FRAME_ROWS + options.length;
 		const termRows = this.tui.terminal?.rows ?? FALLBACK_TERMINAL_ROWS;
 		const maxRows = Math.max(chrome + MIN_BODY_ROWS, Math.floor(termRows * this.maxHeightRatio));
@@ -207,9 +244,11 @@ export class PermissionPrompt implements Component {
 		const pos = overflow ? ` ${this.scroll + 1}-${this.scroll + this.bodyHeight} / ${rows.length} ` : "";
 		out.push(border(`├${"─".repeat(Math.max(0, width - 3 - pos.length))}`) + t.fg("warning", pos) + border("─┤"));
 
-		for (const option of options) out.push(row(option));
+		for (const option of options) out.push(this.input ? `${border("│")} ${option} ${border("│")}` : row(option));
 
-		const hint = overflow
+		const hint = this.input
+			? "Enter send · Esc back to options"
+			: overflow
 			? "↑↓ PgUp PgDn scroll · ←→ select · Enter confirm · Esc deny"
 			: "←→ select · Enter confirm · Esc deny";
 		out.push(row(t.fg("dim", hint)));
@@ -233,7 +272,21 @@ export class PermissionPrompt implements Component {
 		this.tui.requestRender();
 	}
 
+	/** Resolves with an option's key; the tell option opens the input instead. */
+	private choose(key: string): void {
+		if (key === TELL.key) this.openInput();
+		else this.done(key);
+	}
+
 	handleInput(data: string): void {
+		if (this.input) {
+			if (matchesKey(data, Key.escape)) this.closeInput();
+			else {
+				this.input.handleInput(data);
+				this.tui.requestRender();
+			}
+			return;
+		}
 		const page = Math.max(1, this.bodyHeight - 1);
 		if (matchesKey(data, Key.up)) this.scrollBy(-1);
 		else if (matchesKey(data, Key.down)) this.scrollBy(1);
@@ -243,11 +296,11 @@ export class PermissionPrompt implements Component {
 		else if (matchesKey(data, Key.end)) this.scrollBy(Number.POSITIVE_INFINITY);
 		else if (matchesKey(data, Key.left) || matchesKey(data, "shift+tab")) this.select(-1);
 		else if (matchesKey(data, Key.right) || matchesKey(data, Key.tab)) this.select(1);
-		else if (matchesKey(data, Key.enter)) this.done(this.choices[this.selected].key);
+		else if (matchesKey(data, Key.enter)) this.choose(this.choices[this.selected].key);
 		else if (matchesKey(data, Key.escape)) this.done(NO.key);
 		else {
 			const direct = this.choices.find((c) => data.toLowerCase() === c.key);
-			if (direct) this.done(direct.key);
+			if (direct) this.choose(direct.key);
 		}
 	}
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import type { TUI } from "@earendil-works/pi-tui";
 import { buildBody, reasonSpans } from "../src/body.ts";
 import { formatReason, type Reason } from "../src/policy.ts";
@@ -115,7 +115,9 @@ describe("PermissionPrompt rendering", () => {
 	it("caps its height and keeps the options visible", () => {
 		const rows = prompt(200, 20).p.render(70);
 		assert.equal(rows.length, Math.floor(20 * 0.85));
-		assert.ok(rows.at(-3)?.includes("[y] Yes"));
+		const yes = rows.findIndex((r) => r.includes("[y] Yes"));
+		assert.ok(yes > 1, "options are drawn after the body");
+		assert.ok(rows.some((r) => r.includes("[a] Always")));
 	});
 
 	it("shows the scroll position only when content overflows", () => {
@@ -136,7 +138,8 @@ describe("PermissionPrompt input", () => {
 		const { p } = prompt(200);
 		p.render(70);
 		p.handleInput(KEY.pageDown);
-		assert.ok(p.render(70)[1].includes("line 1"));
+		const first = Number(/line (\d+)/.exec(p.render(70)[1])?.[1]);
+		assert.ok(first > 0, "the body scrolled");
 		p.handleInput(KEY.end);
 		assert.ok(p.render(70).some((r) => r.includes("line 199")));
 	});
@@ -156,8 +159,9 @@ describe("PermissionPrompt input", () => {
 
 	it("moves the selection with arrows", () => {
 		const { p, result } = prompt(3);
-		p.handleInput(KEY.right);
-		p.handleInput(KEY.right);
+		p.handleInput(KEY.right); // No
+		p.handleInput(KEY.right); // No, tell pi
+		p.handleInput(KEY.right); // Always
 		p.handleInput(KEY.enter);
 		assert.equal(result(), "a");
 	});
@@ -298,5 +302,79 @@ describe("buildBody: path line", () => {
 		const line = pathLine("/usr/lib/os-release", "/etc/os-release");
 		assert.equal(line?.text, "/etc/os-release → /usr/lib/os-release (symlink)");
 		assert.equal(line?.spans?.find((s) => s.text === "/usr/lib/os-release")?.color, "accent");
+	});
+});
+
+describe("PermissionPrompt: tell pi what to do", () => {
+	const open = () => {
+		let result: { key: string; text?: string } | undefined;
+		const p = new PermissionPrompt(tui(30), theme, "t", [{ text: "x" }], { maxHeightRatio: 0.85, choices: [] }, (key, text) => {
+			result = { key, text };
+		});
+		return { p, result: () => result };
+	};
+	const type = (p: PermissionPrompt, text: string) => {
+		for (const ch of text) p.handleInput(ch);
+	};
+
+	it("offers the option after No", () => {
+		const { p } = open();
+		const row = p.render(120).find((r) => r.includes("[y] Yes")) ?? "";
+		assert.ok(row.indexOf("[n] No") < row.indexOf("[t] No, tell pi what to do"));
+	});
+
+	it("opens a one-line input with t and sends the typed text", () => {
+		const { p, result } = open();
+		p.handleInput("t");
+		assert.equal(result(), undefined, "choosing t does not resolve yet");
+		const rows = p.render(80);
+		assert.ok(rows.some((r) => r.includes("Tell pi:")));
+		assert.ok(!rows.some((r) => r.includes("[y] Yes")), "options are replaced by the input");
+		type(p, "use rg instead");
+		p.handleInput(KEY.enter);
+		assert.deepEqual(result(), { key: "t", text: "use rg instead" });
+	});
+
+	it("does not treat typed letters as shortcuts while the input is open", () => {
+		const { p, result } = open();
+		p.handleInput("t");
+		type(p, "yna");
+		assert.equal(result(), undefined);
+	});
+
+	it("goes back to the options with Esc, without answering", () => {
+		const { p, result } = open();
+		p.handleInput("t");
+		p.handleInput(KEY.esc);
+		assert.equal(result(), undefined);
+		assert.ok(p.render(120).some((r) => r.includes("[y] Yes")));
+		p.handleInput("y");
+		assert.deepEqual(result(), { key: "y", text: undefined });
+	});
+
+	it("treats an empty or blank message as a plain No", () => {
+		const { p, result } = open();
+		p.handleInput("t");
+		type(p, "   ");
+		p.handleInput(KEY.enter);
+		assert.deepEqual(result(), { key: "n", text: undefined });
+	});
+
+	it("keeps every row within the width while typing", () => {
+		const { p } = open();
+		p.handleInput("t");
+		type(p, "x".repeat(200));
+		for (const row of p.render(60)) assert.equal(visibleWidth(row), 60);
+	});
+
+	it("passes focus to the input, so the cursor is placed only when focused", () => {
+		const focused = open();
+		focused.p.focused = true;
+		focused.p.handleInput("t");
+		assert.ok(focused.p.render(80).join("").includes(CURSOR_MARKER));
+
+		const unfocused = open();
+		unfocused.p.handleInput("t");
+		assert.ok(!unfocused.p.render(80).join("").includes(CURSOR_MARKER));
 	});
 });

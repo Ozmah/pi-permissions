@@ -56,6 +56,7 @@ Values: `allow`, `ask`, `deny`.
 |---|---|
 | `Enter` | Selected option (`Yes` by default) |
 | `y` / `n` | Yes / No |
+| `t` | No, and tell pi what to do instead (one line, `Esc` goes back) |
 | `a` / `d` | Always, for the rest of the session |
 | `←` `→` `Tab` | Change selection |
 | `↑` `↓` `PgUp` `PgDn` `Home` `End`, wheel | Scroll |

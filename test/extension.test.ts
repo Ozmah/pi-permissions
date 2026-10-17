@@ -57,6 +57,11 @@ interface FakeCtxOptions {
 	mode?: string;
 	hasUI?: boolean;
 	key?: string;
+	/** Keys sent in order (e.g. "t", typed text, Enter). */
+	keys?: string[];
+	/** What ui.input() returns in non-TUI mode. */
+	inputText?: string;
+	selectIndex?: number;
 	signal?: AbortSignal;
 	confirm?: boolean;
 	onCustom?: (options: unknown) => void;
@@ -65,7 +70,7 @@ interface FakeCtxOptions {
 const status: Record<string, string | undefined> = {};
 const notes: string[] = [];
 
-function ctx({ mode = "tui", hasUI = true, key, signal, confirm = true, onCustom }: FakeCtxOptions = {}) {
+function ctx({ mode = "tui", hasUI = true, key, keys, inputText, selectIndex = 0, signal, confirm = true, onCustom }: FakeCtxOptions = {}) {
 	return {
 		mode,
 		hasUI,
@@ -79,13 +84,15 @@ function ctx({ mode = "tui", hasUI = true, key, signal, confirm = true, onCustom
 				status[k] = v;
 			},
 			confirm: async () => confirm,
-			select: async (_title: string, options: string[]) => options[0],
+			select: async (_title: string, options: string[]) => options[selectIndex],
+			input: async () => inputText,
 			custom: (factory: Function, options: unknown) =>
 				new Promise((resolve) => {
 					onCustom?.(options);
 					const component = factory({ terminal: { rows: 30 }, requestRender() {} }, theme, {}, resolve);
 					component.render(80);
 					if (key) component.handleInput(key);
+					for (const k of keys ?? []) component.handleInput(k);
 				}),
 		},
 	};
@@ -279,5 +286,27 @@ describe("symlinks", () => {
 		await run("");
 		const grants = (entries.at(-1)?.data as { grants: string[] }).grants;
 		assert.ok(grants.includes(`read: in ${real.replace(home, "~")}/`));
+	});
+});
+
+describe("tell pi what to do", () => {
+	const reason = (result: unknown) => (result as { reason?: string } | undefined)?.reason ?? "";
+
+	it("blocks and passes the instructions to the agent", async () => {
+		const result = await bash("rm -rf build", ctx({ keys: ["t", ..."use make clean instead", "\r"] }));
+		assert.ok(blocked(result));
+		assert.match(reason(result), /gave instructions instead:\nuse make clean instead\n/);
+	});
+
+	it("is a plain denial when the message is empty", async () => {
+		const result = await bash("rm -rf build", ctx({ keys: ["t", "\r"] }));
+		assert.match(reason(result), /ask the user how to proceed/);
+	});
+
+	it("works without the TUI through ui.input()", async () => {
+		const tell = ctx({ mode: "rpc", selectIndex: 2, inputText: "  try git stash  " });
+		assert.match(reason(await bash("git reset --hard", tell)), /instead:\ntry git stash\n/);
+		const empty = ctx({ mode: "rpc", selectIndex: 2, inputText: "" });
+		assert.match(reason(await bash("git reset --hard", empty)), /ask the user how to proceed/);
 	});
 });
