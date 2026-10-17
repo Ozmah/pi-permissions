@@ -7,12 +7,38 @@ import * as path from "node:path";
 import type { Action, PermissionConfig, RuleMap } from "./config.ts";
 import { normalizeSegment, parseShell } from "./shell.ts";
 
+/**
+ * Why an action was reached. `fallback` is a `"*"` rule, reported apart so it
+ * never reads like something being granted. `note` forces confirmation.
+ */
+export type Reason =
+	| { kind: "match"; subject: string; section: string; pattern: string; action: Action }
+	| { kind: "fallback" | "default"; subject: string; section: string; action: Action }
+	| { kind: "note"; subject: string; action: "ask" };
+
+export function formatReason(r: Reason): string {
+	switch (r.kind) {
+		case "match":
+			return `${r.subject} → matched ${r.section} "${r.pattern}": ${r.action}`;
+		case "fallback":
+			return `${r.subject} → no matching ${r.section} rule (fallback "*": ${r.action})`;
+		case "default":
+			return `${r.subject} → no matching ${r.section} rule (default: ${r.action})`;
+		case "note":
+			return `${r.subject} → requires confirmation`;
+	}
+}
+
 export interface Decision {
 	action: Action;
-	/** Human-readable explanation of the rules that produced the decision. */
-	reasons: string[];
-	/** Resolved target path for file tools. */
+	/** The rules that produced the decision. */
+	reasons: Reason[];
+	/** Resolved target path for file tools, symlinks followed. Rules and grants use this one. */
 	absPath?: string;
+	/** The path as requested (absolute, symlinks not followed). Differs from `absPath` through a symlink. */
+	requestedPath?: string;
+	/** A write tool targets a protected permission file. */
+	protected?: boolean;
 }
 
 export interface DecideOptions {
@@ -132,14 +158,14 @@ function snippet(s: string): string {
 	return s.length > REASON_SNIPPET ? `${s.slice(0, REASON_SNIPPET - 1)}…` : s;
 }
 
-/**
- * Explains which rule produced an action. A `"*"` pattern is reported as the
- * fallback so it never reads like something being granted.
- */
-export function explain(subject: string, section: string, hit: RuleHit | undefined, action: Action): string {
-	if (hit && hit.pattern !== "*") return `${subject} → matched ${section} "${hit.pattern}": ${action}`;
-	if (hit) return `${subject} → no matching ${section} rule (fallback "*": ${action})`;
-	return `${subject} → no matching ${section} rule (default: ${action})`;
+/** Explains which rule produced an action. */
+function explain(subject: string, section: string, hit: RuleHit | undefined, action: Action): Reason {
+	if (hit && hit.pattern !== "*") return { kind: "match", subject, section, pattern: hit.pattern, action };
+	return { kind: hit ? "fallback" : "default", subject, section, action };
+}
+
+function note(subject: string): Reason {
+	return { kind: "note", subject, action: "ask" };
 }
 
 function decideTool(cfg: PermissionConfig, toolName: string): Decision {
@@ -157,10 +183,10 @@ function decidePath(cfg: PermissionConfig, absPath: string, cwd: string): Decisi
 
 function decideBash(cfg: PermissionConfig, command: string, protectedPaths: string[]): Decision {
 	const { segments, risky } = parseShell(command);
-	if (segments.length === 0) return { action: "ask", reasons: ["empty command"] };
+	if (segments.length === 0) return { action: "ask", reasons: [note("empty command")] };
 
 	let action: Action = "allow";
-	const reasons: string[] = [];
+	const reasons: Reason[] = [];
 	for (const seg of segments) {
 		const text = normalizeSegment(seg.text);
 		const hit = resolveRules(cfg.bash, text);
@@ -170,14 +196,14 @@ function decideBash(cfg: PermissionConfig, command: string, protectedPaths: stri
 	}
 	if (risky.length) {
 		action = strictest(action, "ask");
-		reasons.push(`contains ${risky.join(", ")} → requires confirmation`);
+		reasons.push(note(`contains ${risky.join(", ")}`));
 	}
 	// Best effort: bash can write anywhere, so mentioning a protected path (absolute, or
 	// any `permissions.json`, which covers relative forms) requires confirmation.
 	const mentionsConfig = protectedPaths.some((p) => p.endsWith(CONFIG_NAME)) && command.includes(CONFIG_NAME);
 	if (mentionsConfig || protectedPaths.some((p) => command.includes(p))) {
 		action = strictest(action, "ask");
-		reasons.push("mentions a protected permission file → requires confirmation");
+		reasons.push(note("mentions a protected permission file"));
 	}
 	return { action, reasons };
 }
@@ -194,7 +220,9 @@ export function decide(
 	const tool = decideTool(cfg, toolName);
 	if (!FILE_TOOLS.has(toolName)) return tool;
 
-	const absPath = resolvePath(typeof input.path === "string" ? input.path : undefined, opts.cwd);
+	const rawPath = typeof input.path === "string" ? input.path : undefined;
+	const absPath = resolvePath(rawPath, opts.cwd);
+	const requestedPath = path.resolve(opts.cwd, expandHome(rawPath ?? "."));
 	let action = tool.action;
 	const reasons = [...tool.reasons];
 
@@ -203,9 +231,12 @@ export function decide(
 		action = strictest(action, outside.action);
 		reasons.push(...outside.reasons);
 	}
-	if (WRITE_TOOLS.has(toolName) && protectedPaths.some((p) => isInside(absPath, p))) {
+	const isProtected = WRITE_TOOLS.has(toolName) && protectedPaths.some((p) => isInside(absPath, p));
+	if (isProtected) {
 		action = strictest(action, "ask");
-		reasons.push("protected permission file → requires confirmation");
+		reasons.push(note("protected permission file"));
 	}
-	return { action, reasons, absPath };
+	const result: Decision = { action, reasons, absPath, requestedPath };
+	if (isProtected) result.protected = true;
+	return result;
 }

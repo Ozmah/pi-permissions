@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Syntax highlighting with Pi's highlighter and theme: bash commands, `write` content, both sides of `edit` diffs. Diff signs keep their red/green.
+- Markdown files use Pi's Markdown colors (headings, code, links, bullets, quotes); fenced code blocks are highlighted in their own language.
+- `/permissions off` disables the extension for the current working directory (persistent); `/permissions off --session` until the session ends; `/permissions on` re-enables.
+- Status bar shows `⚠ permissions off` while disabled.
+- Argument completion for `/permissions`.
+- `/permissions` shows a colored summary card in the transcript (not sent to the model).
+- Prompt reasons are colored: action by meaning (allow / ask / deny), matched pattern highlighted.
+- "Always" grants by scope, each labeled explicitly: `a` covers the directory for read-only tools and the exact file for `write`/`edit`; `d` covers the directory and subfolders. Directory grants never cover protected files.
+- Prompt options stack one per row when they do not fit on one.
+- When a path goes through a symlink, the prompt shows both: `Path: /etc/os-release → /usr/lib/os-release (symlink)`. Rules and grants keep using the real path.
+
 ## 0.2.0
 
 - Scrollable prompt: fixed options, full command visible regardless of length.
