@@ -1,7 +1,7 @@
 {
   "name": "pi-permissions",
   "version": "0.2.0",
-  "description": "Allow / ask / deny rules for Pi coding agent tool calls.",
+  "description": "Permission prompts for Pi, for the slightly paranoid.",
   "type": "module",
   "license": "MIT",
   "author": "Ozmah (https://ozmah.dev)",

@@ -1,8 +1,8 @@
 # pi-permissions
 
-Allow / ask / deny rules for [Pi](https://pi.dev) tool calls.
+Permission prompts for [Pi](https://pi.dev), for the slightly paranoid.
 
-Every tool call is checked against rules before it runs. Allowed calls run, denied calls are blocked, and the rest open a prompt.
+Every tool call is checked against your rules before it runs: allowed calls run, denied calls are blocked, everything else asks.
 
 ## Install
 
@@ -10,9 +10,13 @@ Every tool call is checked against rules before it runs. Allowed calls run, deni
 pi install git:github.com/Ozmah/pi-permissions
 ```
 
-Then create `~/.pi/agent/permissions.json` (see [`permissions.example.json`](permissions.example.json)) and run `/reload`.
+Create `~/.pi/agent/permissions.json` (start from [`permissions.example.json`](permissions.example.json)) and run `/reload`. Without it, every tool call asks.
 
-Without a config file every tool call asks.
+## Usage
+
+Run `/permissions` to see the active rules, session grants and available commands.
+
+![/permissions](docs/permissions.jpg)
 
 ## Configuration
 
@@ -29,77 +33,56 @@ Without a config file every tool call asks.
 | Key | Applies to |
 |---|---|
 | `default` | Anything no rule matches. Default `ask`. |
-| `tools` | Tool names: `read`, `write`, `edit`, `ls`, `find`, `grep`, MCP and extension tools. `bash` is governed by the `bash` key only. |
-| `external_directory` | Paths outside the working directory used by `read`, `write`, `edit`, `ls`, `find`, `grep`. Unmatched paths ask. |
+| `tools` | Tools by name: `read`, `write`, `edit`, `ls`, `find`, `grep`, MCP and extension tools. |
+| `external_directory` | Paths outside the working directory. Unmatched paths ask. |
 | `bash` | Each segment of a bash command. |
-| `ui.position` | Where the prompt appears: `editor`, `center` or `top`. |
+| `ui.position` | `editor` (replaces the input), `center` or `top`. |
 
-Values are `allow`, `ask` or `deny`.
+Values: `allow`, `ask`, `deny`.
 
-Files:
+`~/.pi/agent/permissions.json` is global. `<project>/.pi/permissions.json` applies to that project, only if it is trusted, and overrides the global file key by key. Both are read on every call; no `/reload` needed.
 
-- `~/.pi/agent/permissions.json`: global.
-- `<project>/.pi/permissions.json`: per project, loaded only if the project is trusted. Overrides the global file key by key.
+**Patterns.** `*` matches anything, including `/` and spaces; `?` one character. A trailing ` *` or `/*` also matches the bare prefix (`git status *` matches `git status`). `~/` is the home directory.
 
-Both are read on every tool call; changes apply without `/reload`.
+**Precedence.** The most specific pattern wins; on a tie, the strictest action. File tools take the strictest of their `tools` and `external_directory` rules.
 
-### Patterns
+**Bash.** Commands are split on `&&`, `||`, `|`, `;`, `&` and newlines, outside quotes, and every segment is checked. Command substitution, process substitution, redirection to a file and unclosed quotes always ask.
 
-- `*` matches any characters, including `/` and spaces. `?` matches one character.
-- A trailing ` *` or `/*` also matches the bare prefix: `git status *` matches `git status`.
-- `~/` expands to the home directory in `external_directory`.
-
-### Precedence
-
-- The most specific matching pattern wins (most non-wildcard characters). On a tie, the strictest action wins (`deny` > `ask` > `allow`).
-- File tools use the strictest of the `tools` rule and the `external_directory` rule.
-
-### Bash
-
-A command is split on `&&`, `||`, `|`, `;`, `&` and newlines, outside quotes. Every segment is checked; the strictest result applies.
-
-These always require at least `ask`:
-
-- Command substitution: `$(...)`, backticks.
-- Process substitution: `<(...)`, `>(...)`.
-- Redirection to a file. `2>&1` and `> /dev/null` are not counted.
-- Unclosed quotes.
-
-### Protected files
-
-Writing the permission files or the extension's own files always asks, whatever the rules. For bash this is best effort: any command mentioning `permissions.json` or those paths asks.
+**Protected files.** Writing the permission files or the extension's own files always asks, whatever the rules.
 
 ## Prompt
 
 | Key | Action |
 |---|---|
-| `Enter` | Confirm the selected option (`Yes` by default) |
-| `y` / `n` / `a` | Yes / No / Always this session |
+| `Enter` | Selected option (`Yes` by default) |
+| `y` / `n` | Yes / No |
+| `a` / `d` | Always, for the rest of the session |
 | `←` `→` `Tab` | Change selection |
-| `↑` `↓` `PgUp` `PgDn` `Home` `End`, mouse wheel | Scroll |
+| `↑` `↓` `PgUp` `PgDn` `Home` `End`, wheel | Scroll |
 | `Esc` | No |
 
-- **Always this session** remembers the exact command, or the tool and path, until the session ends.
-- On **No**, the agent is told not to retry and to ask how to proceed.
-- Without a TUI (e.g. RPC) a plain selection dialog is used, truncated to 40 lines. Without any UI, calls that ask are blocked.
+Each "always" option states what it covers:
 
-Positions:
+| Tool | `a` | `d` |
+|---|---|---|
+| `read`, `ls`, `find`, `grep` | That directory | That directory and subfolders |
+| `write`, `edit` | That file | That directory and subfolders |
+| `bash` | That exact command | - |
+| Tools without a path | Any input | - |
 
-- `editor`: replaces the input editor until answered.
-- `center`: floating box centered over the transcript, sized to its content.
-- `top`: floating box at the top of the screen.
+Grants live in memory and end with the session. They never cover protected files, and `deny` rules still apply.
 
-## Commands
+## Turning it off
 
-- `/permissions`: show loaded files, merged rules and session grants.
-- `/permissions reset`: clear session grants.
+`/permissions off` disables the extension for the current working directory: tool calls run without checks, as in Pi without it. `/permissions off --session` lasts until the session ends. `/permissions on` re-enables it. The status bar shows `⚠ permissions off` while disabled.
 
 ## Limitations
 
-- This is not a sandbox. It decides whether a tool call runs; it does not isolate what runs.
-- Bash can read and write paths that cannot be detected from the command text. Use `ask` for anything not explicitly allowed.
-- A trailing `*` allows any arguments. Some read-only commands can write files through options, e.g. `git log --output=<file>`.
-- The bash scanner is not a full shell parser. When it cannot tell, it errs towards `ask`.
+- It is not a sandbox. It decides whether a call runs, not what the call can reach.
+- Bash can touch paths that cannot be detected from the command text. Keep `"*": "ask"` in `bash`.
+- A trailing `*` allows any argument, and some read-only commands can write through options (`git log --output=<file>`).
+- The bash scanner is not a full shell parser. When unsure, it asks.
+- While disabled, the agent can write any file, including the permission files.
 
 ## Development
 
@@ -108,12 +91,7 @@ Requires Node.js 22.18 or later.
 ```sh
 npm install
 npm run check   # typecheck + tests
-```
-
-Try a local checkout without installing it:
-
-```sh
-pi -e ./
+pi -e ./        # try a local checkout without installing
 ```
 
 ## License
