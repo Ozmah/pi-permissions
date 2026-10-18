@@ -1,19 +1,18 @@
 {
   "name": "pi-permissions",
-  "version": "0.2.0",
-  "description": "Allow / ask / deny rules for Pi coding agent tool calls.",
-  "type": "module",
+  "version": "0.3.0",
+  "description": "Permission prompts for Pi, for the slightly paranoid.",
+  "keywords": [
+    "permissions",
+    "pi",
+    "pi-package"
+  ],
   "license": "MIT",
   "author": "Ozmah (https://ozmah.dev)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Ozmah/pi-permissions.git"
   },
-  "keywords": [
-    "pi-package",
-    "pi",
-    "permissions"
-  ],
   "files": [
     "src",
     "permissions.example.json",
@@ -21,27 +20,34 @@
     "CHANGELOG.md",
     "LICENSE"
   ],
-  "pi": {
-    "extensions": [
-      "./src/index.ts"
-    ]
-  },
-  "engines": {
-    "node": ">=22.18"
-  },
+  "type": "module",
   "scripts": {
     "test": "node --test \"test/*.test.ts\"",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm test"
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.2.0",
+    "@earendil-works/pi-tui": "^1.2.0",
+    "@oxlint/plugins": "1.88.0",
+    "@types/node": "^24.0.0",
+    "oxfmt": "0.73.0",
+    "oxlint": "1.88.0",
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
   },
-  "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^1.2.0",
-    "@earendil-works/pi-tui": "^1.2.0",
-    "@types/node": "^24.0.0",
-    "typescript": "^7.0.2"
+  "engines": {
+    "node": ">=22.18"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
   }
 }

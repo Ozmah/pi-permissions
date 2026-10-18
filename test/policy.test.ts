@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { mergeConfigs } from "../src/config.ts";
-import { decide, matches, resolvePath, resolveRules } from "../src/policy.ts";
+import { type JsonObject, mergeConfigs } from "../src/config.ts";
+import { decide, formatReason, matches, resolvePath, resolveRules } from "../src/policy.ts";
 
 const home = os.homedir();
+
 // Resolved like the extension does (e.g. /tmp is a symlink on macOS).
 const cwd = resolvePath(path.join(os.tmpdir(), "pi-permissions-test-project"), "/");
 
@@ -16,7 +18,7 @@ const cfg = mergeConfigs({
 	bash: { "git log *": "allow", "git status *": "allow", "git diff *": "allow", "sudo *": "deny", "*": "ask" },
 });
 
-const action = (toolName: string, input: Record<string, unknown>, protectedPaths?: string[]) =>
+const action = (toolName: string, input: JsonObject, protectedPaths?: string[]) =>
 	decide(cfg, toolName, input, { cwd, protectedPaths }).action;
 
 describe("matches", () => {
@@ -95,7 +97,8 @@ describe("decide: protected paths", () => {
 	const config = path.join(cwd, ".pi", "permissions.json");
 	const extensionRoot = path.join(home, ".pi", "agent", "extensions", "pi-permissions");
 	const protectedPaths = [config, extensionRoot];
-	const run = (toolName: string, input: Record<string, unknown>) =>
+
+	const run = (toolName: string, input: JsonObject) =>
 		decide(allowAll, toolName, input, { cwd, protectedPaths }).action;
 
 	it("asks before writing a permission file, whatever the rules", () => {
@@ -119,7 +122,7 @@ describe("decide: protected paths", () => {
 });
 
 describe("decide: reasons", () => {
-	const reasons = (command: string) => decide(cfg, "bash", { command }, { cwd }).reasons;
+	const reasons = (command: string) => decide(cfg, "bash", { command }, { cwd }).reasons.map(formatReason);
 
 	it("reports the fallback rule as a fallback", () => {
 		assert.deepEqual(reasons("ls -la"), [`"ls -la" → no matching bash rule (fallback "*": ask)`]);
@@ -130,13 +133,36 @@ describe("decide: reasons", () => {
 	});
 
 	it("reports the config default when nothing matches", () => {
-		const r = decide(mergeConfigs(), "bash", { command: "ls" }, { cwd }).reasons;
+		const r = decide(mergeConfigs(), "bash", { command: "ls" }, { cwd }).reasons.map(formatReason);
 		assert.deepEqual(r, [`"ls" → no matching bash rule (default: ask)`]);
+	});
+
+	it("reports forced confirmations as notes", () => {
+		assert.deepEqual(reasons("git diff > out.txt").at(-1), "contains redirection to file \u2192 requires confirmation");
 	});
 
 	it("truncates long segments", () => {
 		const [reason] = reasons(`echo ${"x".repeat(200)}`);
 		assert.ok(reason.length < 160);
 		assert.ok(reason.includes("…"));
+	});
+});
+
+describe("decide: symlinks", () => {
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-permissions-link-")));
+	fs.mkdirSync(path.join(dir, "real"));
+	fs.writeFileSync(path.join(dir, "real", "os-release"), "x");
+	fs.mkdirSync(path.join(dir, "etc"));
+	fs.symlinkSync(path.join(dir, "real", "os-release"), path.join(dir, "etc", "os-release"));
+
+	it("decides on the real path and keeps the requested one", () => {
+		const d = decide(cfg, "read", { path: path.join(dir, "etc", "os-release") }, { cwd });
+		assert.equal(d.absPath, path.join(dir, "real", "os-release"));
+		assert.equal(d.requestedPath, path.join(dir, "etc", "os-release"));
+	});
+
+	it("reports the same path twice when there is no symlink", () => {
+		const d = decide(cfg, "read", { path: path.join(dir, "real", "os-release") }, { cwd });
+		assert.equal(d.absPath, d.requestedPath);
 	});
 });
