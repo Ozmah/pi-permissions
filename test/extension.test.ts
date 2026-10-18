@@ -36,11 +36,20 @@ interface ToolResult {
 }
 
 interface ToolEvent {
+	toolCallId: string;
 	toolName: string;
 	input: JsonObject;
 }
 
-/** The prompt's answer: the chosen key, plus the text for "tell pi". */
+/** A tool's output, as the tool_result handler sees and returns it. */
+interface ResultContent {
+	content: { type: "text"; text: string }[];
+	structuredContent?: JsonObject;
+}
+
+type ResultHandler = (event: ResultContent & { toolCallId: string }) => ResultContent | undefined;
+
+/** The prompt's answer: the chosen key, plus the text for MESSAGE and "tell pi". */
 interface Answer {
 	key: string;
 	text?: string;
@@ -73,6 +82,7 @@ interface Command {
 }
 
 const handlers = new Map<string, Handler>();
+const resultHandlers = new Map<string, ResultHandler>();
 const commands = new Map<string, Command>();
 const renderers = new Map<string, EntryRenderer>();
 const entries: { type: string; data: Summary }[] = [];
@@ -90,7 +100,10 @@ before(async () => {
 	const { default: extension } = await import("../src/index.ts");
 
 	const fakePi = {
-		on: (name: string, handler: Handler) => handlers.set(name, handler),
+		on: (name: string, handler: Handler & ResultHandler) => {
+			handlers.set(name, handler);
+			resultHandlers.set(name, handler);
+		},
 		registerCommand: (name: string, command: Command) => commands.set(name, command),
 		registerEntryRenderer: (type: string, renderer: EntryRenderer) => renderers.set(type, renderer),
 		appendEntry: (type: string, data: Summary) => entries.push({ type, data }),
@@ -162,8 +175,19 @@ function ctx({
 	};
 }
 
-const call = (toolName: string, input: JsonObject, c = ctx()) =>
-	registered(handlers, "tool_call")({ toolName, input }, c);
+const call = (toolName: string, input: JsonObject, c = ctx(), toolCallId = "call-1") =>
+	registered(handlers, "tool_call")({ toolCallId, toolName, input }, c);
+
+/** Runs the tool_result handler on a fake output of call `toolCallId`. */
+const result = (toolCallId = "call-1") =>
+	registered(
+		resultHandlers,
+		"tool_result",
+	)({
+		toolCallId,
+		content: [{ type: "text", text: "output" }],
+		structuredContent: { ok: true },
+	});
 
 const bash = (command: string, c = ctx()) => call("bash", { command }, c);
 const blocked = (result: ToolResult | undefined) => result?.block === true;
@@ -381,10 +405,44 @@ describe("tell pi what to do", () => {
 	});
 
 	it("works without the TUI through ui.input()", async () => {
-		const tell = ctx({ mode: "rpc", selectIndex: 2, inputText: "  try git stash  " });
+		const tell = ctx({ mode: "rpc", selectIndex: 3, inputText: "  try git stash  " });
 		assert.match(reason(await bash("git reset --hard", tell)), /instead:\ntry git stash\n/);
-		const empty = ctx({ mode: "rpc", selectIndex: 2, inputText: "" });
+		const empty = ctx({ mode: "rpc", selectIndex: 3, inputText: "" });
 		assert.match(reason(await bash("git reset --hard", empty)), /ask the user how to proceed/);
+	});
+});
+
+describe("yes, with a message", () => {
+	it("allows the call and appends the message to its result, once", async () => {
+		assert.equal(await bash("rm -rf build", ctx({ keys: ["m", ..."also clean dist", "\r"] })), undefined);
+		const changed = result();
+		assert.deepEqual(
+			changed?.content.map((c) => c.text),
+			["output", "The user approved this tool call and added a message:\nalso clean dist"],
+		);
+		assert.deepEqual(changed?.structuredContent, { ok: true }, "structured output is kept");
+		assert.equal(result(), undefined, "the message is delivered once");
+	});
+
+	it("only touches the result of the approved call", async () => {
+		await bash("rm -rf build", ctx({ keys: ["m", ..."note", "\r"] }));
+		assert.equal(result("other-call"), undefined);
+	});
+
+	it("is a plain Yes when the message is empty", async () => {
+		assert.equal(await bash("rm -rf build", ctx({ keys: ["m", "\r"] })), undefined);
+		assert.equal(result(), undefined);
+	});
+
+	it("is forgotten when the agent run ends", async () => {
+		await bash("rm -rf build", ctx({ keys: ["m", ..."note", "\r"] }));
+		await registered(handlers, "agent_end")({}, ctx());
+		assert.equal(result(), undefined);
+	});
+
+	it("works without the TUI through ui.input()", async () => {
+		assert.equal(await bash("rm -rf build", ctx({ mode: "rpc", selectIndex: 1, inputText: " note " })), undefined);
+		assert.match(result()?.content.at(-1)?.text ?? "", /message:\nnote$/);
 	});
 });
 

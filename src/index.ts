@@ -25,7 +25,7 @@ import {
 import { type MarkdownTheme, highlightMarkdown } from "./markdown.ts";
 import { decide, formatReason, resolvePath } from "./policy.ts";
 import { type CallTarget, type Grant, type GrantChoice, describeGrant, grantChoices, grantMatches } from "./grants.ts";
-import { type BodyLine, NO, PermissionPrompt, TELL, YES } from "./prompt-ui.ts";
+import { BASE_CHOICES, type BodyLine, MESSAGE, NO, PermissionPrompt, TELL, inputSpec } from "./prompt-ui.ts";
 import { readState, setDisabled, writeState } from "./state.ts";
 import { COMMANDS, SUMMARY_ENTRY, type Summary, renderSummary } from "./summary.ts";
 import { sanitize } from "./text.ts";
@@ -44,6 +44,8 @@ const FALLBACK_MAX_LINES = 40;
 const STATUS_KEY = "permissions";
 const UNINSPECTABLE = "pi-permissions could not inspect this tool call: its input is not JSON.";
 const DENIED_REASON = "The user denied this action. Do not retry it; ask the user how to proceed.";
+
+const approvedMessage = (text: string) => `The user approved this tool call and added a message:\n${text}`;
 
 const toldReason = (text: string) =>
 	`The user denied this action and gave instructions instead:\n${text}\nFollow these instructions instead of retrying the same action.`;
@@ -140,13 +142,33 @@ export default function (pi: ExtensionAPI) {
 		return box;
 	});
 
+	/** Messages from "Yes, with a message", by tool call id, until the call's result arrives. */
+	const messages = new Map<string, string>();
+
 	pi.on("session_start", async (_event, ctx) => {
 		sessionGrants = [];
+		messages.clear();
 		sessionOff.clear();
 		const errors: string[] = [];
 		updateStatus(ctx, offMode(projectDir(ctx), errors));
 		notifyErrors(ctx, errors);
 	});
+
+	pi.on("tool_result", (event) => {
+		const text = messages.get(event.toolCallId);
+
+		if (text === undefined) return undefined;
+		messages.delete(event.toolCallId);
+
+		// Replacing content drops structuredContent unless it is passed along.
+		return {
+			content: [...event.content, { type: "text", text: approvedMessage(text) }],
+			structuredContent: event.structuredContent,
+		};
+	});
+
+	// A call blocked after approval (e.g. by another extension) never reaches tool_result.
+	pi.on("agent_end", () => messages.clear());
 
 	pi.on("tool_call", async (event, ctx) => {
 		const cwd = projectDir(ctx);
@@ -198,6 +220,13 @@ export default function (pi: ExtensionAPI) {
 		if (choice.key === NO.key) return { block: true, reason: DENIED_REASON };
 
 		if (choice.key === TELL.key) return { block: true, reason: toldReason(choice.text ?? "") };
+
+		if (choice.key === MESSAGE.key) {
+			if (choice.text) messages.set(event.toolCallId, choice.text);
+
+			return undefined;
+		}
+
 		const granted = choices.find((c) => c.key === choice.key)?.grant;
 
 		if (granted) sessionGrants.push(granted);
@@ -302,7 +331,7 @@ const LAYOUTS = {
 	},
 } as const;
 
-/** The chosen option's key (`YES.key`, `NO.key`, `TELL.key` or a grant's key), plus the text for TELL. */
+/** The chosen option's key (a base choice or a grant's key), plus the text for MESSAGE and TELL. */
 interface Answer {
 	key: string;
 	text?: string;
@@ -318,15 +347,19 @@ async function ask(
 	choices: GrantChoice[],
 ): Promise<Answer> {
 	if (ctx.mode !== "tui") {
-		const options = [YES, NO, TELL, ...choices];
+		const options = [...BASE_CHOICES, ...choices];
 		const labels = options.map((o) => sanitize(o.label));
 		const picked = await ctx.ui.select(sanitize(`${title}\n\n${plainBody(body, FALLBACK_MAX_LINES)}`), labels);
 		const key = options[labels.indexOf(picked ?? "")]?.key ?? NO.key;
+		const spec = inputSpec(key);
 
-		if (key !== TELL.key) return { key };
-		const text = (await ctx.ui.input("Tell pi what to do instead", "what should pi do instead?"))?.trim();
+		if (!spec) return { key };
+		const text = (await ctx.ui.input(spec.title, spec.placeholder))?.trim();
 
-		return text ? { key, text } : DENY;
+		// A dismissed input (undefined) is a denial; empty text is the plain answer.
+		if (text === undefined) return DENY;
+
+		return text ? { key, text } : { key: spec.empty };
 	}
 
 	const signal = ctx.signal;

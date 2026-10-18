@@ -208,6 +208,7 @@ describe("PermissionPrompt input", () => {
 
 	it("moves the selection with arrows", () => {
 		const { p, result } = prompt(3);
+		p.handleInput(KEY.right); // Yes, with a message
 		p.handleInput(KEY.right); // No
 		p.handleInput(KEY.right); // No, tell pi
 		p.handleInput(KEY.right); // Always
@@ -229,6 +230,7 @@ describe("PermissionPrompt input", () => {
 		const { p, result } = prompt(200);
 		const rows = p.render(40);
 		assert.ok(rows.some((r) => r.includes("↑↓ select")));
+		p.handleInput(KEY.down); // Yes, with a message
 		p.handleInput(KEY.down); // No
 		p.handleInput(KEY.down); // No, tell pi
 		p.handleInput(KEY.down); // Always
@@ -473,6 +475,30 @@ describe("PermissionPrompt: tell pi what to do", () => {
 		type(p, "   ");
 		p.handleInput(KEY.enter);
 		assert.deepEqual(result(), { key: "n", text: undefined });
+	});
+
+	it("offers Yes, with a message, right after Yes", () => {
+		const { p } = open();
+		const row = p.render(120).find((r) => r.includes("[y] Yes")) ?? "";
+		assert.ok(row.indexOf("[y] Yes") < row.indexOf("[m] Yes, with a message"));
+		assert.ok(row.indexOf("[m] Yes, with a message") < row.indexOf("[n] No"));
+	});
+
+	it("opens the message input with m and sends the typed text", () => {
+		const { p, result } = open();
+		p.handleInput("m");
+		assert.equal(result(), undefined);
+		assert.ok(p.render(80).some((r) => r.includes("Message:")));
+		type(p, "also run the tests");
+		p.handleInput(KEY.enter);
+		assert.deepEqual(result(), { key: "m", text: "also run the tests" });
+	});
+
+	it("treats an empty message as a plain Yes", () => {
+		const { p, result } = open();
+		p.handleInput("m");
+		p.handleInput(KEY.enter);
+		assert.deepEqual(result(), { key: "y", text: undefined });
 	});
 
 	it("keeps every row within the width while typing", () => {

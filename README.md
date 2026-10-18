@@ -54,15 +54,16 @@ Values: `allow`, `ask`, `deny`.
 
 ## Prompt
 
-| Key                                       | Action                                                         |
-| ----------------------------------------- | -------------------------------------------------------------- |
-| `Enter`                                   | Selected option (`Yes` by default)                             |
-| `y` / `n`                                 | Yes / No                                                       |
-| `t`                                       | No, and tell pi what to do instead (one line, `Esc` goes back) |
-| `a` / `d`                                 | Always, for the rest of the session                            |
-| `←` `→` `Tab`                             | Change selection                                               |
-| `↑` `↓` `PgUp` `PgDn` `Home` `End`, wheel | Scroll                                                         |
-| `Esc`                                     | No                                                             |
+| Key                                       | Action                                                                       |
+| ----------------------------------------- | ---------------------------------------------------------------------------- |
+| `Enter`                                   | Selected option (`Yes` by default)                                           |
+| `y` / `n`                                 | Yes / No                                                                     |
+| `m`                                       | Yes, and add a message to the tool result (one line, `Esc` goes back)        |
+| `t`                                       | No, and tell pi what to do instead (one line, `Esc` goes back)               |
+| `a` / `d`                                 | Always, for the rest of the session                                          |
+| `←` `→` `Tab`                             | Change selection (also `↑` `↓` when options are one per row)                 |
+| `↑` `↓` `PgUp` `PgDn` `Home` `End`, wheel | Scroll (only `PgUp` `PgDn` `Home` `End`, wheel when options are one per row) |
+| `Esc`                                     | No                                                                           |
 
 Each "always" option states what it covers:
 

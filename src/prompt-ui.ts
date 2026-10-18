@@ -19,8 +19,33 @@ export interface PromptChoice {
 export const YES: PromptChoice = { key: "y", label: "Yes" };
 export const NO: PromptChoice = { key: "n", label: "No" };
 
+/** Approves and opens a one-line input; the text is appended to the tool result. */
+export const MESSAGE: PromptChoice = { key: "m", label: "Yes, with a message" };
+
 /** Denies and opens a one-line input; the prompt resolves with the typed text. */
 export const TELL: PromptChoice = { key: "t", label: "No, tell pi what to do" };
+
+/** The fixed options, before the "always" grants. */
+export const BASE_CHOICES: readonly PromptChoice[] = [YES, MESSAGE, NO, TELL];
+
+/** Options that open the input, with its placeholder and what an empty submit means. */
+export function inputSpec(key: string): InputSpec | undefined {
+	if (key === MESSAGE.key)
+		return { title: "Message for pi", placeholder: "message for pi (the call runs)", empty: YES.key };
+
+	if (key === TELL.key)
+		return { title: "Tell pi what to do instead", placeholder: "what should pi do instead?", empty: NO.key };
+
+	return undefined;
+}
+
+export interface InputSpec {
+	/** Dialog title in non-TUI modes. */
+	title: string;
+	placeholder: string;
+	/** The answer when the text is empty. */
+	empty: string;
+}
 
 /** The subset of Pi's Theme the prompt uses. */
 export type PromptTheme = Pick<Theme, "fg" | "bg" | "bold">;
@@ -134,8 +159,10 @@ export class PermissionPrompt implements Component, Focusable {
 	private readonly maxHeightRatio: number;
 	private readonly choices: PromptChoice[];
 	private readonly done: (key: string, text?: string) => void;
-	/** The "tell pi" input while it is open. */
+	/** The message / "tell pi" input while it is open. */
 	private input: Input | undefined;
+	/** The option that opened the input. */
+	private inputKey = TELL.key;
 	private isFocused = false;
 
 	constructor(
@@ -151,7 +178,7 @@ export class PermissionPrompt implements Component, Focusable {
 		this.title = title;
 		this.body = body;
 		this.maxHeightRatio = options.maxHeightRatio;
-		this.choices = [YES, NO, TELL, ...options.choices];
+		this.choices = [...BASE_CHOICES, ...options.choices];
 		this.done = done;
 	}
 
@@ -166,12 +193,13 @@ export class PermissionPrompt implements Component, Focusable {
 		if (this.input) this.input.focused = value;
 	}
 
-	private openInput(): void {
-		const input = new Input({ placeholder: "what should pi do instead?" });
+	private openInput(key: string, spec: InputSpec): void {
+		const input = new Input({ placeholder: spec.placeholder });
 		input.focused = this.isFocused;
-		// Empty text is a plain No.
-		input.onSubmit = (value) => (value.trim() ? this.done(TELL.key, value.trim()) : this.done(NO.key));
+		// Empty text is the plain answer: Yes for a message, No for tell.
+		input.onSubmit = (value) => (value.trim() ? this.done(key, value.trim()) : this.done(spec.empty));
 		this.input = input;
+		this.inputKey = key;
 		this.tui.requestRender();
 	}
 
@@ -182,7 +210,7 @@ export class PermissionPrompt implements Component, Focusable {
 
 	/** The input row, padded to the inner width (not truncated: it carries the cursor marker). */
 	private inputRow(input: Input, inner: number): string {
-		const label = this.theme.fg("accent", "Tell pi: ");
+		const label = this.theme.fg("accent", this.inputKey === MESSAGE.key ? "Message: " : "Tell pi: ");
 		const field = input.render(Math.max(1, inner - visibleWidth(label)))[0] ?? "";
 		const content = label + field;
 
@@ -307,9 +335,11 @@ export class PermissionPrompt implements Component, Focusable {
 		this.tui.requestRender();
 	}
 
-	/** Resolves with an option's key; the tell option opens the input instead. */
+	/** Resolves with an option's key; the message and tell options open the input instead. */
 	private choose(key: string): void {
-		if (key === TELL.key) this.openInput();
+		const spec = inputSpec(key);
+
+		if (spec) this.openInput(key, spec);
 		else this.done(key);
 	}
 
