@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { mergeConfigs } from "../src/config.ts";
+import { type JsonObject, mergeConfigs } from "../src/config.ts";
 import { decide, formatReason, matches, resolvePath, resolveRules } from "../src/policy.ts";
 
 const home = os.homedir();
@@ -18,7 +18,7 @@ const cfg = mergeConfigs({
 	bash: { "git log *": "allow", "git status *": "allow", "git diff *": "allow", "sudo *": "deny", "*": "ask" },
 });
 
-const action = (toolName: string, input: Record<string, unknown>, protectedPaths?: string[]) =>
+const action = (toolName: string, input: JsonObject, protectedPaths?: string[]) =>
 	decide(cfg, toolName, input, { cwd, protectedPaths }).action;
 
 describe("matches", () => {
@@ -98,7 +98,7 @@ describe("decide: protected paths", () => {
 	const extensionRoot = path.join(home, ".pi", "agent", "extensions", "pi-permissions");
 	const protectedPaths = [config, extensionRoot];
 
-	const run = (toolName: string, input: Record<string, unknown>) =>
+	const run = (toolName: string, input: JsonObject) =>
 		decide(allowAll, toolName, input, { cwd, protectedPaths }).action;
 
 	it("asks before writing a permission file, whatever the rules", () => {

@@ -1,6 +1,7 @@
 /**
  * Builds the prompt body for a tool call. The body is unbounded; the prompt scrolls it.
  */
+import { type Json, type JsonObject, isJsonObject, isNumber, isString } from "./config.ts";
 import { formatReason, type Reason } from "./policy.ts";
 import { ACTION_COLOR, type BodyLine, type Span } from "./prompt-ui.ts";
 import { displayLines, parseShell } from "./shell.ts";
@@ -46,11 +47,11 @@ function highlightLines(raw: string, lang: string | undefined, deps: BodyDeps): 
 	return out?.length === count ? out.map(onlySgr) : undefined;
 }
 
-function bashBody(input: Record<string, unknown>, deps: BodyDeps): BodyLine[] {
+function bashBody(input: JsonObject, deps: BodyDeps): BodyLine[] {
 	const lines: BodyLine[] = [heading("Command")];
 	let first = true;
 
-	for (const text of displayLines(parseShell(String(input.command ?? "")))) {
+	for (const text of displayLines(parseShell(isString(input.command) ? input.command : ""))) {
 		const highlighted = highlightLines(text, "bash", deps);
 
 		for (const piece of highlighted ?? [text]) {
@@ -65,7 +66,7 @@ function bashBody(input: Record<string, unknown>, deps: BodyDeps): BodyLine[] {
 		}
 	}
 
-	if (typeof input.timeout === "number") lines.push({ text: `timeout: ${input.timeout}s`, color: "dim" });
+	if (isNumber(input.timeout)) lines.push({ text: `timeout: ${input.timeout}s`, color: "dim" });
 
 	return lines;
 }
@@ -99,14 +100,21 @@ function diffLines(raw: string, sign: "-" | "+", lang: string | undefined, deps:
 	return raw.split("\n").map((text) => ({ text, prefix, contPrefix: prefix, color }));
 }
 
-function editBody(edits: unknown[], lang: string | undefined, deps: BodyDeps): BodyLine[] {
+/** Text of one side of an edit; anything that is not a string shows as empty. */
+function side(edit: Json, key: "oldText" | "newText"): string {
+	const value = isJsonObject(edit) ? edit[key] : undefined;
+
+	return isString(value) ? value : "";
+}
+
+function editBody(edits: Json[], lang: string | undefined, deps: BodyDeps): BodyLine[] {
 	const lines: BodyLine[] = [];
+
 	edits.forEach((edit, i) => {
-		const e = (typeof edit === "object" && edit !== null ? edit : {}) as { oldText?: unknown; newText?: unknown };
 		lines.push(BLANK, heading(`Edit ${i + 1}/${edits.length}`));
 		// Each side is highlighted as a whole so multi-line strings and comments color correctly.
-		lines.push(...diffLines(String(e.oldText ?? ""), "-", lang, deps));
-		lines.push(...diffLines(String(e.newText ?? ""), "+", lang, deps));
+		lines.push(...diffLines(side(edit, "oldText"), "-", lang, deps));
+		lines.push(...diffLines(side(edit, "newText"), "+", lang, deps));
 	});
 
 	return lines;
@@ -165,7 +173,7 @@ function pathLine(absPath: string, requestedPath: string | undefined): BodyLine 
 
 export function buildBody(
 	toolName: string,
-	input: Record<string, unknown>,
+	input: JsonObject,
 	absPath: string | undefined,
 	reasons: Reason[],
 	deps: BodyDeps = {},
@@ -180,7 +188,7 @@ export function buildBody(
 		const lang = deps.languageOf?.(absPath);
 		body.push(pathLine(absPath, requestedPath));
 
-		if (toolName === "write" && typeof input.content === "string") {
+		if (toolName === "write" && isString(input.content)) {
 			body.push(...writeBody(input.content, lang, deps));
 		} else if (toolName === "edit" && Array.isArray(input.edits)) {
 			body.push(...editBody(input.edits, lang, deps));
@@ -201,6 +209,7 @@ export function buildBody(
 	return body;
 }
 
+// oxlint-disable-next-line no-control-regex -- matches ANSI color codes to strip them for plain-text clients.
 const SGR = /\x1b\[[0-9;]*m/g;
 
 /** Plain-text rendering for clients without the TUI (e.g. RPC), capped at `maxLines`. */

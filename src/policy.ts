@@ -4,7 +4,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Action, PermissionConfig, RuleMap } from "./config.ts";
+import { type Action, type JsonObject, type PermissionConfig, type RuleMap, isString } from "./config.ts";
 import { normalizeSegment, parseShell } from "./shell.ts";
 
 /**
@@ -230,21 +230,16 @@ function decideBash(cfg: PermissionConfig, command: string, protectedPaths: stri
 	return { action, reasons };
 }
 
-export function decide(
-	cfg: PermissionConfig,
-	toolName: string,
-	input: Record<string, unknown>,
-	opts: DecideOptions,
-): Decision {
+export function decide(cfg: PermissionConfig, toolName: string, input: JsonObject, opts: DecideOptions): Decision {
 	const protectedPaths = opts.protectedPaths ?? [];
 
-	if (toolName === "bash") return decideBash(cfg, String(input.command ?? ""), protectedPaths);
+	if (toolName === "bash") return decideBash(cfg, isString(input.command) ? input.command : "", protectedPaths);
 
 	const tool = decideTool(cfg, toolName);
 
 	if (!FILE_TOOLS.has(toolName)) return tool;
 
-	const rawPath = typeof input.path === "string" ? input.path : undefined;
+	const rawPath = isString(input.path) ? input.path : undefined;
 	const absPath = resolvePath(rawPath, opts.cwd);
 	const requestedPath = path.resolve(opts.cwd, expandHome(rawPath ?? "."));
 	let action = tool.action;

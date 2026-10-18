@@ -3,6 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { before, beforeEach, describe, it } from "node:test";
+import type { Component } from "@earendil-works/pi-tui";
+import type { JsonObject } from "../src/config.ts";
+import type { PromptHost, PromptTheme } from "../src/prompt-ui.ts";
+import type { Summary } from "../src/summary.ts";
 
 // Isolate from the real ~/.pi: point HOME at a temp dir before loading the extension.
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-permissions-home-"));
@@ -21,43 +25,87 @@ fs.mkdirSync(agentDir, { recursive: true });
 const project = fs.realpathSync(path.join(home, "project"));
 
 const baseConfig = { tools: { read: "allow" }, bash: { "git status *": "allow", "sudo *": "deny", "*": "ask" } };
-const writeConfig = (extra: object = {}) => fs.writeFileSync(configFile, JSON.stringify({ ...baseConfig, ...extra }));
 
-type Handler = (event: unknown, ctx: unknown) => Promise<unknown>;
+const writeConfig = (extra: JsonObject = {}) =>
+	fs.writeFileSync(configFile, JSON.stringify({ ...baseConfig, ...extra }));
+
+/** What the tool_call handler resolves with. */
+interface ToolResult {
+	block?: boolean;
+	reason?: string;
+}
+
+interface ToolEvent {
+	toolName: string;
+	input: JsonObject;
+}
+
+/** The prompt's answer: the chosen key, plus the text for "tell pi". */
+interface Answer {
+	key: string;
+	text?: string;
+}
+
+interface CustomOptions {
+	overlay?: boolean;
+}
+
+type FakeContext = ReturnType<typeof ctx>;
+
+type Handler = (event: ToolEvent | Record<string, never>, ctx: FakeContext) => Promise<ToolResult | undefined>;
+
+type Factory = (
+	host: PromptHost,
+	theme: PromptTheme,
+	keybindings: Record<string, never>,
+	done: (answer: Answer) => void,
+) => Component;
+
+type EntryRenderer = (
+	entry: { data?: Summary },
+	options: { expanded: boolean },
+	theme: PromptTheme,
+) => Component | undefined;
 
 interface Command {
-	handler: (args: string, ctx: unknown) => Promise<void>;
+	handler: (args: string, ctx: FakeContext) => Promise<void>;
 	getArgumentCompletions: (prefix: string) => { value: string }[];
 }
 
-const handlers: Record<string, Handler> = {};
-const commands: Record<string, Command> = {};
-const renderers: Record<string, Function> = {};
-const entries: { type: string; data: unknown }[] = [];
-const theme = { fg: (_c: string, t: string) => t, bg: (_c: string, t: string) => t, bold: (t: string) => t };
+const handlers = new Map<string, Handler>();
+const commands = new Map<string, Command>();
+const renderers = new Map<string, EntryRenderer>();
+const entries: { type: string; data: Summary }[] = [];
+const theme: PromptTheme = { fg: (_c, t) => t, bg: (_c, t) => t, bold: (t) => t };
+
+function registered<T>(map: Map<string, T>, name: string): T {
+	const value = map.get(name);
+
+	assert.ok(value, `${name} is registered`);
+
+	return value;
+}
 
 before(async () => {
 	const { default: extension } = await import("../src/index.ts");
-	extension({
-		on: (name: string, handler: Handler) => {
-			handlers[name] = handler;
-		},
-		registerCommand: (name: string, command: Command) => {
-			commands[name] = command;
-		},
-		registerEntryRenderer: (type: string, renderer: Function) => {
-			renderers[type] = renderer;
-		},
-		appendEntry: (type: string, data: unknown) => {
-			entries.push({ type, data });
-		},
-	} as never);
+
+	const fakePi = {
+		on: (name: string, handler: Handler) => handlers.set(name, handler),
+		registerCommand: (name: string, command: Command) => commands.set(name, command),
+		registerEntryRenderer: (type: string, renderer: EntryRenderer) => renderers.set(type, renderer),
+		appendEntry: (type: string, data: Summary) => entries.push({ type, data }),
+	};
+
+	// SAFETY: the fake implements every ExtensionAPI member the extension calls; anything else it touched would throw and fail the tests.
+	extension(fakePi as never);
 });
+
+const startSession = () => registered(handlers, "session_start")({}, ctx());
 
 beforeEach(async () => {
 	writeConfig();
 	fs.rmSync(stateFile, { force: true });
-	await handlers.session_start({}, ctx()); // clears session state
+	await startSession(); // clears session state
 });
 
 interface FakeCtxOptions {
@@ -71,10 +119,10 @@ interface FakeCtxOptions {
 	selectIndex?: number;
 	signal?: AbortSignal;
 	confirm?: boolean;
-	onCustom?: (options: unknown) => void;
+	onCustom?: (options: CustomOptions | undefined) => void;
 }
 
-const status: Record<string, string | undefined> = {};
+const status = new Map<string, string | undefined>();
 const notes: string[] = [];
 
 function ctx({
@@ -97,30 +145,37 @@ function ctx({
 		ui: {
 			theme,
 			notify: (msg: string) => notes.push(msg),
-			setStatus: (k: string, v: string | undefined) => {
-				status[k] = v;
-			},
+			setStatus: (k: string, v: string | undefined) => status.set(k, v),
 			confirm: async () => confirm,
 			select: async (_title: string, options: string[]) => options[selectIndex],
 			input: async () => inputText,
-			custom: (factory: Function, options: unknown) =>
-				new Promise((resolve) => {
+			custom: (factory: Factory, options?: CustomOptions) =>
+				new Promise<Answer>((resolve) => {
 					onCustom?.(options);
 					const component = factory({ terminal: { rows: 30 }, requestRender() {} }, theme, {}, resolve);
+
 					component.render(80);
 
-					if (key) component.handleInput(key);
-
-					for (const k of keys ?? []) component.handleInput(k);
+					for (const k of [...(key ? [key] : []), ...(keys ?? [])]) component.handleInput?.(k);
 				}),
 		},
 	};
 }
 
-const call = (toolName: string, input: object, c = ctx()) => handlers.tool_call({ toolName, input }, c);
+const call = (toolName: string, input: JsonObject, c = ctx()) =>
+	registered(handlers, "tool_call")({ toolName, input }, c);
+
 const bash = (command: string, c = ctx()) => call("bash", { command }, c);
-const blocked = (result: unknown) => (result as { block?: boolean } | undefined)?.block === true;
-const run = (args: string, c = ctx()) => commands.permissions.handler(args, c);
+const blocked = (result: ToolResult | undefined) => result?.block === true;
+const run = (args: string, c = ctx()) => registered(commands, "permissions").handler(args, c);
+
+const lastCard = () => {
+	const entry = entries.at(-1);
+
+	assert.ok(entry, "a card was added");
+
+	return entry;
+};
 
 describe("tool calls", () => {
 	it("passes allowed calls without prompting", async () => {
@@ -165,7 +220,7 @@ describe("tool calls", () => {
 
 describe("prompt position", () => {
 	it("replaces the editor by default (no overlay)", async () => {
-		let options: unknown = "unset";
+		let options: CustomOptions | undefined | "unset" = "unset";
 		await bash("echo g", ctx({ key: "y", onCustom: (o) => (options = o) }));
 		assert.equal(options, undefined);
 	});
@@ -173,8 +228,8 @@ describe("prompt position", () => {
 	it("uses an overlay for center and top", async () => {
 		for (const position of ["center", "top"]) {
 			writeConfig({ ui: { position } });
-			let options: { overlay?: boolean } | undefined;
-			await bash(`echo ${position}`, ctx({ key: "y", onCustom: (o) => (options = o as typeof options) }));
+			let options: CustomOptions | undefined;
+			await bash(`echo ${position}`, ctx({ key: "y", onCustom: (o) => (options = o) }));
 			assert.equal(options?.overlay, true, position);
 		}
 	});
@@ -186,12 +241,12 @@ describe("/permissions off | on", () => {
 		assert.ok(JSON.parse(fs.readFileSync(stateFile, "utf8")).disabled[project]);
 		assert.equal(await bash("sudo ls", ctx({ key: "n" })), undefined);
 		assert.equal(await bash("echo x", ctx({ key: "n" })), undefined);
-		assert.match(status.permissions ?? "", /permissions off$/);
+		assert.match(status.get("permissions") ?? "", /permissions off$/);
 	});
 
 	it("survives a new session when persistent", async () => {
 		await run("off");
-		await handlers.session_start({}, ctx());
+		await startSession();
 		assert.equal(await bash("sudo ls", ctx({ key: "n" })), undefined);
 	});
 
@@ -199,8 +254,8 @@ describe("/permissions off | on", () => {
 		await run("off --session");
 		assert.equal(fs.existsSync(stateFile), false);
 		assert.equal(await bash("sudo ls", ctx({ key: "n" })), undefined);
-		assert.match(status.permissions ?? "", /\(session\)/);
-		await handlers.session_start({}, ctx());
+		assert.match(status.get("permissions") ?? "", /\(session\)/);
+		await startSession();
 		assert.ok(blocked(await bash("sudo ls", ctx({ key: "n" }))));
 	});
 
@@ -215,7 +270,7 @@ describe("/permissions off | on", () => {
 		await run("on");
 		assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, "utf8")).disabled, {});
 		assert.ok(blocked(await bash("sudo ls", ctx({ key: "n" }))));
-		assert.equal(status.permissions, undefined);
+		assert.equal(status.get("permissions"), undefined);
 	});
 
 	it("rejects unknown arguments", async () => {
@@ -229,11 +284,11 @@ describe("/permissions off | on", () => {
 	it("/permissions adds a summary card that renders", async () => {
 		await run("off --session");
 		await run("");
-		const entry = entries.at(-1);
-		assert.equal(entry?.type, "pi-permissions-summary");
-		assert.equal((entry?.data as { off?: string }).off, "session");
-		const themeWithBg = { ...theme, bg: (_c: string, t: string) => t };
-		const component = renderers["pi-permissions-summary"](entry, { expanded: false }, themeWithBg);
+		const entry = lastCard();
+		assert.equal(entry.type, "pi-permissions-summary");
+		assert.equal(entry.data.off, "session");
+		const component = registered(renderers, "pi-permissions-summary")(entry, { expanded: false }, theme);
+		assert.ok(component, "the card renders");
 		const text = component.render(80).join("\n");
 		assert.match(text, /pi-permissions/);
 		assert.match(text, /off \(this session\)/);
@@ -242,7 +297,9 @@ describe("/permissions off | on", () => {
 
 	it("completes subcommands", () => {
 		assert.deepEqual(
-			commands.permissions.getArgumentCompletions("of").map((i) => i.value),
+			registered(commands, "permissions")
+				.getArgumentCompletions("of")
+				.map((i) => i.value),
 			["off", "off --session"],
 		);
 	});
@@ -275,7 +332,7 @@ describe("always grants", () => {
 	it("shows grants explicitly in the /permissions card", async () => {
 		await read(shot("paste-1.png"), ctx({ key: "a" }));
 		await run("");
-		const grants = (entries.at(-1)?.data as { grants: string[] }).grants;
+		const { grants } = lastCard().data;
 		assert.deepEqual(grants, [`read: in ${clipboard.replace(home, "~")}/`]);
 	});
 });
@@ -292,9 +349,9 @@ describe("symlinks", () => {
 		let rendered = "";
 		const c = ctx({ key: "a" });
 		const custom = c.ui.custom;
-		c.ui.custom = (factory: Function, options: unknown) =>
-			custom((tui: unknown, th: unknown, kb: unknown, done: Function) => {
-				const component = factory(tui, th, kb, done);
+		c.ui.custom = (factory, options) =>
+			custom((host, th, kb, done) => {
+				const component = factory(host, th, kb, done);
 				rendered = component.render(200).join("\n");
 
 				return component;
@@ -304,13 +361,13 @@ describe("symlinks", () => {
 		assert.ok(rendered.includes("usr-lib/"), "the grant label names the real directory");
 
 		await run("");
-		const grants = (entries.at(-1)?.data as { grants: string[] }).grants;
+		const { grants } = lastCard().data;
 		assert.ok(grants.includes(`read: in ${real.replace(home, "~")}/`));
 	});
 });
 
 describe("tell pi what to do", () => {
-	const reason = (result: unknown) => (result as { reason?: string } | undefined)?.reason ?? "";
+	const reason = (result: ToolResult | undefined) => result?.reason ?? "";
 
 	it("blocks and passes the instructions to the agent", async () => {
 		const result = await bash("rm -rf build", ctx({ keys: ["t", ..."use make clean instead", "\r"] }));
@@ -328,5 +385,14 @@ describe("tell pi what to do", () => {
 		assert.match(reason(await bash("git reset --hard", tell)), /instead:\ntry git stash\n/);
 		const empty = ctx({ mode: "rpc", selectIndex: 2, inputText: "" });
 		assert.match(reason(await bash("git reset --hard", empty)), /ask the user how to proceed/);
+	});
+});
+
+describe("input that is not JSON", () => {
+	it("is blocked, because it cannot be inspected", async () => {
+		const result = await call("mcp__x__tool", { count: Number.NaN }, ctx({ key: "y" }));
+
+		assert.ok(blocked(result));
+		assert.match(result?.reason ?? "", /could not inspect/);
 	});
 });

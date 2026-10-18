@@ -6,7 +6,7 @@
  */
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { Input, Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { Component, Focusable, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
+import type { Component, Focusable, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { sanitize } from "./text.ts";
 
 /** An answer option. `key` is both its shortcut and the value the prompt resolves with. */
@@ -114,12 +114,18 @@ export function wrapPlain(text: string, width: number): string[] {
 	return out;
 }
 
+/** What the prompt needs from Pi's TUI: re-rendering and the terminal height. */
+export interface PromptHost {
+	requestRender(): void;
+	terminal?: { readonly rows: number };
+}
+
 export class PermissionPrompt implements Component, Focusable {
 	private scroll = 0;
 	private selected = 0; // "Yes"
 	private bodyHeight = 1;
 	private wrapCache: { width: number; rows: string[] } | undefined;
-	private readonly tui: TUI;
+	private readonly tui: PromptHost;
 	private readonly theme: PromptTheme;
 	private readonly title: string;
 	private readonly body: BodyLine[];
@@ -131,7 +137,7 @@ export class PermissionPrompt implements Component, Focusable {
 	private isFocused = false;
 
 	constructor(
-		tui: TUI,
+		tui: PromptHost,
 		theme: PromptTheme,
 		title: string,
 		body: BodyLine[],

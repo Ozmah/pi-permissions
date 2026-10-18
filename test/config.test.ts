@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mergeConfigs, parseConfig } from "../src/config.ts";
+import { isJson, mergeConfigs, parseConfig } from "../src/config.ts";
 
 describe("parseConfig", () => {
 	it("accepts valid rules and ui.position", () => {
@@ -62,5 +62,26 @@ describe("mergeConfigs", () => {
 		const a = mergeConfigs();
 		a.tools.read = "allow";
 		assert.deepEqual(mergeConfigs().tools, {});
+	});
+});
+
+describe("isJson", () => {
+	it("accepts plain JSON data, nested", () => {
+		assert.ok(isJson({ a: [1, "x", true, null, { b: 2.5 }] }));
+	});
+
+	it("rejects values JSON cannot carry", () => {
+		for (const [index, value] of [
+			undefined,
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			() => 1,
+			Symbol("s"),
+			10n,
+			{ a: undefined },
+			[() => 1],
+		].entries()) {
+			assert.ok(!isJson(value), `case ${index}`);
+		}
 	});
 });

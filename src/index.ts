@@ -12,7 +12,16 @@ import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-ag
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { type BodyDeps, buildBody, plainBody } from "./body.ts";
-import { type PermissionConfig, type PromptPosition, defaultConfig, mergeConfigs, readConfigFile } from "./config.ts";
+import {
+	type PermissionConfig,
+	type PromptPosition,
+	defaultConfig,
+	errorMessage,
+	isJson,
+	isJsonObject,
+	mergeConfigs,
+	readConfigFile,
+} from "./config.ts";
 import { type MarkdownTheme, highlightMarkdown } from "./markdown.ts";
 import { decide, formatReason, resolvePath } from "./policy.ts";
 import { type CallTarget, type Grant, type GrantChoice, describeGrant, grantChoices, grantMatches } from "./grants.ts";
@@ -33,6 +42,7 @@ const EXTENSION_ROOT = packageRoot();
 const FALLBACK_MAX_LINES = 40;
 
 const STATUS_KEY = "permissions";
+const UNINSPECTABLE = "pi-permissions could not inspect this tool call: its input is not JSON.";
 const DENIED_REASON = "The user denied this action. Do not retry it; ask the user how to proceed.";
 
 const toldReason = (text: string) =>
@@ -80,7 +90,7 @@ function loadConfig(cwd: string, trusted: boolean): LoadedConfig {
 			}
 		} catch (e) {
 			// Unreadable or invalid JSON: ignore all files, so every call asks.
-			errors.push(`${file}: ${(e as Error).message}`);
+			errors.push(`${file}: ${errorMessage(e)}`);
 
 			return { cfg: defaultConfig(), files, errors };
 		}
@@ -150,7 +160,16 @@ export default function (pi: ExtensionAPI) {
 		const { cfg, errors: configErrors } = loadConfig(cwd, ctx.isProjectTrusted());
 		notifyErrors(ctx, [...errors, ...configErrors]);
 
-		const input = event.input as Record<string, unknown>;
+		// Tool arguments are JSON from the model; anything else cannot be inspected, so it is blocked.
+		const raw = event.input;
+		const input = isJson(raw) && isJsonObject(raw) ? raw : undefined;
+
+		if (!input) {
+			if (ctx.hasUI) ctx.ui.notify(sanitize(`⛔ Blocked: ${event.toolName}\n${UNINSPECTABLE}`), "warning");
+
+			return { block: true, reason: UNINSPECTABLE };
+		}
+
 		const protectedPaths = [GLOBAL_CONFIG, STATE_FILE, path.join(cwd, PROJECT_CONFIG)];
 
 		if (EXTENSION_ROOT) protectedPaths.push(EXTENSION_ROOT);
@@ -262,7 +281,7 @@ export default function (pi: ExtensionAPI) {
 				} else if (sub === "on" && flags.length === 0) turnOn(ctx, dir);
 				else ctx.ui.notify(USAGE, "warning");
 			} catch (e) {
-				ctx.ui.notify(`permissions: ${(e as Error).message}`, "error");
+				ctx.ui.notify(`permissions: ${errorMessage(e)}`, "error");
 			}
 		},
 	});

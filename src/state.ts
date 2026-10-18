@@ -6,6 +6,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { type Json, errorMessage, isJsonObject, isString } from "./config.ts";
 
 export interface PermissionState {
 	version: 1;
@@ -25,24 +26,22 @@ export function readState(file: string, errors: string[]): PermissionState {
 	if (!fs.existsSync(file)) return emptyState();
 
 	try {
-		const raw: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
-		const disabled = (raw as { disabled?: unknown } | null)?.disabled;
+		const raw: Json = JSON.parse(fs.readFileSync(file, "utf8"));
+		const disabled = isJsonObject(raw) ? raw.disabled : undefined;
 
-		if (typeof disabled !== "object" || disabled === null || Array.isArray(disabled)) {
-			throw new Error('missing or invalid "disabled" object');
-		}
+		if (!isJsonObject(disabled)) throw new Error('missing or invalid "disabled" object');
 
 		const state = emptyState();
 
 		for (const [dir, entry] of Object.entries(disabled)) {
-			const since = (entry as { since?: unknown } | null)?.since;
+			const since = isJsonObject(entry) && isString(entry.since) ? entry.since : "";
 
-			if (path.isAbsolute(dir)) state.disabled[dir] = { since: typeof since === "string" ? since : "" };
+			if (path.isAbsolute(dir)) state.disabled[dir] = { since };
 		}
 
 		return state;
 	} catch (e) {
-		errors.push(`${file}: ${(e as Error).message} (ignored, permissions stay enabled)`);
+		errors.push(`${file}: ${errorMessage(e)} (ignored, permissions stay enabled)`);
 
 		return emptyState();
 	}

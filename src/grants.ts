@@ -4,6 +4,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type JsonObject, isString } from "./config.ts";
 import { isInside } from "./policy.ts";
 
 export type Grant =
@@ -20,12 +21,16 @@ export interface GrantChoice {
 
 const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read", "ls", "find", "grep"]);
 
+function commandOf(input: JsonObject): string {
+	return isString(input.command) ? input.command : "";
+}
+
 /** Path segments kept when shortening a path for a button label. */
 const LABEL_SEGMENTS = 2;
 
 export interface CallTarget {
 	tool: string;
-	input: Record<string, unknown>;
+	input: JsonObject;
 	/** Resolved path for file tools. */
 	absPath?: string;
 	/** The target is a protected permission file: only exact-file grants apply. */
@@ -46,7 +51,7 @@ function scopeDir(absPath: string): string {
 export function grantMatches(grant: Grant, target: CallTarget): boolean {
 	switch (grant.kind) {
 		case "command":
-			return target.tool === "bash" && grant.command === String(target.input.command ?? "");
+			return target.tool === "bash" && grant.command === commandOf(target.input);
 		case "tool":
 			return grant.tool === target.tool;
 		case "file":
@@ -93,7 +98,7 @@ export function grantChoices(target: CallTarget): GrantChoice[] {
 	const { tool, absPath } = target;
 
 	if (tool === "bash") {
-		const command = String(target.input.command ?? "");
+		const command = commandOf(target.input);
 
 		return [{ key: "a", label: "Always: this exact command", grant: { kind: "command", command } }];
 	}

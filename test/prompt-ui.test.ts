@@ -1,16 +1,22 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
-import type { TUI } from "@earendil-works/pi-tui";
+import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { buildBody, reasonSpans } from "../src/body.ts";
 import { formatReason, type Reason } from "../src/policy.ts";
-import { PermissionPrompt, type PromptTheme, wrapPlain } from "../src/prompt-ui.ts";
+import { PermissionPrompt, type PromptHost, type PromptTheme, wrapPlain } from "../src/prompt-ui.ts";
 import { onlySgr, sanitize } from "../src/text.ts";
 
 const theme: PromptTheme = { fg: (_c, t) => t, bg: (_c, t) => `<${t}>`, bold: (t) => t };
 
-function tui(rows = 20): TUI {
-	return { terminal: { rows }, requestRender() {} } as unknown as TUI;
+function tui(rows = 20): PromptHost {
+	return { terminal: { rows }, requestRender() {} };
+}
+
+function wheel(wheelDelta: number): TuiMouseEvent {
+	const position = { x: 0, y: 0, screenX: 0, screenY: 0, width: 80, height: 20 };
+
+	return { type: "wheel", button: "none", ...position, shift: false, alt: false, ctrl: false, wheelDelta };
 }
 
 function prompt(lines: number, rows = 20) {
@@ -190,7 +196,7 @@ describe("PermissionPrompt input", () => {
 	it("scrolls with the mouse wheel", () => {
 		const { p } = prompt(200);
 		p.render(70);
-		assert.deepEqual(p.handleMouse({ type: "wheel", wheelDelta: 5 } as never), { handled: true });
+		assert.deepEqual(p.handleMouse(wheel(5)), { handled: true });
 		assert.ok(p.render(70)[1].includes("line 5"));
 	});
 
