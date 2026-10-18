@@ -350,7 +350,8 @@ export class PermissionPrompt implements Component, Focusable {
 		for (const option of options) out.push(this.input ? `${border("│")} ${option} ${border("│")}` : row(option));
 
 		const select = this.stacked ? "↑↓ select" : "←→ select";
-		const scroll = this.stacked ? "PgUp PgDn scroll" : "↑↓ PgUp PgDn scroll";
+		// PgUp/PgDn are not shown: in fullscreen Pi takes them to scroll the transcript.
+		const scroll = this.stacked ? "⇧↑↓ scroll" : "↑↓ scroll";
 
 		const hint = this.input
 			? "Enter send · Esc back to options"
@@ -400,7 +401,10 @@ export class PermissionPrompt implements Component, Focusable {
 
 		const page = Math.max(1, this.bodyHeight - 1);
 
-		if (matchesKey(data, Key.up)) {
+		// Shift+↑↓ always scroll: the only scroll keys left when ↑↓ select and Pi owns PgUp/PgDn.
+		if (matchesKey(data, Key.shift("up"))) this.scrollBy(-1);
+		else if (matchesKey(data, Key.shift("down"))) this.scrollBy(1);
+		else if (matchesKey(data, Key.up)) {
 			if (this.stacked) this.select(-1);
 			else this.scrollBy(-1);
 		} else if (matchesKey(data, Key.down)) {

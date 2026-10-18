@@ -54,17 +54,18 @@ Values: `allow`, `ask`, `deny`.
 
 ## Prompt
 
-| Key                                       | Action                                                                       |
-| ----------------------------------------- | ---------------------------------------------------------------------------- |
-| `Enter`                                   | Selected option (`Yes` by default)                                           |
-| `y` / `n`                                 | Yes / No                                                                     |
-| `m`                                       | Yes, and add a message to the tool result (one line, `Esc` goes back)        |
-| `t`                                       | No, and tell pi what to do instead (one line, `Esc` goes back)               |
-| `a` / `d`                                 | Always, for the rest of the session                                          |
-| `←` `→` `Tab`                             | Change selection (also `↑` `↓` when options are one per row)                 |
-| Click an option                           | Select it; click it again to confirm (fullscreen mode only)                  |
-| `↑` `↓` `PgUp` `PgDn` `Home` `End`, wheel | Scroll (only `PgUp` `PgDn` `Home` `End`, wheel when options are one per row) |
-| `Esc`                                     | No                                                                           |
+| Key                                       | Action                                                                         |
+| ----------------------------------------- | ------------------------------------------------------------------------------ |
+| `Enter`                                   | Selected option (`Yes` by default)                                             |
+| `y` / `n`                                 | Yes / No                                                                       |
+| `m`                                       | Yes, and add a message to the tool result (one line, `Esc` goes back)          |
+| `t`                                       | No, and tell pi what to do instead (one line, `Esc` goes back)                 |
+| `a` / `d`                                 | Always, for the rest of the session                                            |
+| `←` `→` `Tab`                             | Change selection (also `↑` `↓` when options are one per row)                   |
+| Click an option                           | Select it; click it again to confirm (fullscreen mode only)                    |
+| `↑` `↓` `PgUp` `PgDn` `Home` `End`, wheel | Scroll (`↑` `↓` select instead when options are one per row)                   |
+| `Shift+↑` `Shift+↓`                       | Scroll, in any layout. In fullscreen Pi keeps `PgUp` `PgDn` for the transcript |
+| `Esc`                                     | No                                                                             |
 
 Each "always" option states what it covers:
 

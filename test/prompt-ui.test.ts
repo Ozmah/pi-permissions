@@ -42,6 +42,8 @@ const KEY = {
 	down: "\x1b[B",
 	right: "\x1b[C",
 	left: "\x1b[D",
+	shiftUp: "\x1b[1;2A",
+	shiftDown: "\x1b[1;2B",
 	pageDown: "\x1b[6~",
 	end: "\x1b[F",
 	enter: "\r",
@@ -316,6 +318,18 @@ describe("PermissionPrompt input", () => {
 		p.handleInput(KEY.up); // No
 		p.handleInput(KEY.enter);
 		assert.equal(result(), "n");
+	});
+
+	it("scrolls with Shift+↑↓ when the options are stacked", () => {
+		const { p, result } = prompt(200);
+		assert.ok(p.render(40).some((r) => r.includes("⇧↑↓ scroll")));
+		p.handleInput(KEY.shiftDown);
+		p.handleInput(KEY.shiftDown);
+		assert.ok(p.render(40)[1].includes("line 2"));
+		p.handleInput(KEY.shiftUp);
+		assert.ok(p.render(40)[1].includes("line 1"));
+		p.handleInput(KEY.enter);
+		assert.equal(result(), "y", "the selection did not move");
 	});
 
 	it("answers directly with y / n / a", () => {

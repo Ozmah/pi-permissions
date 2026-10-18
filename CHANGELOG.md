@@ -5,6 +5,7 @@
 - `m`: "Yes, with a message". Approves the call and appends one line from the user to its result, so the agent reads it with the output. An empty message is a plain Yes.
 - When the options are stacked one per row, `↑` `↓` change the selection instead of scrolling; `PgUp` `PgDn` `Home` `End` and the wheel still scroll. The hint shows the keys for the current layout.
 - Options are clickable in fullscreen mode: the first click selects, a second click on the same option confirms. A single stray click never approves.
+- `Shift+↑` `Shift+↓` scroll the prompt in any layout. In fullscreen Pi keeps `PgUp` `PgDn` for the transcript, which left stacked options with no keyboard scroll.
 
 ## 0.3.0
 
