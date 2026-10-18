@@ -25,6 +25,7 @@ export interface ShellAnalysis {
 
 /** Matches `>&N`, `>&-` (fd duplication / closing), which write no file. */
 const FD_DUP = /^&(\d+|-)(?![\w./~])/;
+
 /** Matches `/dev/null` as a complete word. */
 const DEV_NULL = /^\/dev\/null(?=$|[\s;&|)])/;
 
@@ -34,8 +35,11 @@ const DEV_NULL = /^\/dev\/null(?=$|[\s;&|)])/;
  */
 function isFileRedirect(command: string, i: number): boolean {
 	let rest = command.slice(i + 1);
+
 	if (rest.startsWith(">") || rest.startsWith("|")) rest = rest.slice(1); // >> and >|
+
 	if (rest.startsWith("&")) return !FD_DUP.test(rest); // `>&file` redirects to a file
+
 	return !DEV_NULL.test(rest.trimStart());
 }
 
@@ -48,6 +52,7 @@ export function parseShell(command: string): ShellAnalysis {
 
 	const push = (nextOp: Operator) => {
 		const text = cur.trim();
+
 		if (text) segments.push(op ? { text, op } : { text });
 		cur = "";
 		op = nextOp;
@@ -60,15 +65,18 @@ export function parseShell(command: string): ShellAnalysis {
 
 		if (quote === "'") {
 			cur += ch;
+
 			if (ch === "'") quote = null;
 			continue;
 		}
+
 		if (ch === "\\" && next !== undefined) {
 			// Line continuation joins lines; any other escape is kept literally.
 			cur += next === "\n" ? " " : ch + next;
 			i++;
 			continue;
 		}
+
 		if (quote === '"') {
 			if (ch === '"') quote = null;
 			else if (ch === "`" || (ch === "$" && next === "(")) risky.add("command substitution");
@@ -82,8 +90,11 @@ export function parseShell(command: string): ShellAnalysis {
 			cur += ch;
 			continue;
 		}
+
 		if (ch === "`" || (ch === "$" && next === "(")) risky.add("command substitution");
+
 		if ((ch === "<" || ch === ">") && next === "(") risky.add("process substitution");
+
 		if (ch === ">" && next !== "(" && isFileRedirect(command, i)) risky.add("redirection to file");
 
 		if (ch === "&" && next === "&") {
@@ -94,6 +105,7 @@ export function parseShell(command: string): ShellAnalysis {
 			i++;
 		} else if (ch === "|") {
 			push("|");
+
 			if (next === "&") i++; // |& pipes stderr too
 		} else if (ch === ";") {
 			push(";");
@@ -105,8 +117,10 @@ export function parseShell(command: string): ShellAnalysis {
 			cur += ch;
 		}
 	}
+
 	if (quote) risky.add("unclosed quote");
 	push("\n");
+
 	return { segments, risky: [...risky] };
 }
 

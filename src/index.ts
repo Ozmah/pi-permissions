@@ -34,13 +34,16 @@ const FALLBACK_MAX_LINES = 40;
 
 const STATUS_KEY = "permissions";
 const DENIED_REASON = "The user denied this action. Do not retry it; ask the user how to proceed.";
+
 const toldReason = (text: string) =>
 	`The user denied this action and gave instructions instead:\n${text}\nFollow these instructions instead of retrying the same action.`;
+
 const USAGE = "Usage: /permissions [reset | off [--session] | on]";
 
 /** Pi's highlighter for code; Markdown uses Pi's `md*` colors, with fenced blocks back to Pi's highlighter. */
 function bodyDeps(theme: MarkdownTheme): BodyDeps {
 	const code = (text: string, lang: string) => highlightCode(text, lang);
+
 	return {
 		highlight: (text, lang) => (lang === "markdown" ? highlightMarkdown(text, theme, code) : code(text, lang)),
 		languageOf: getLanguageFromPath,
@@ -66,9 +69,11 @@ function loadConfig(cwd: string, trusted: boolean): LoadedConfig {
 	const files: string[] = [];
 	const layers = [];
 	const candidates = trusted ? [GLOBAL_CONFIG, path.join(cwd, PROJECT_CONFIG)] : [GLOBAL_CONFIG];
+
 	for (const file of candidates) {
 		try {
 			const layer = readConfigFile(file, errors);
+
 			if (layer) {
 				layers.push(layer);
 				files.push(file);
@@ -76,9 +81,11 @@ function loadConfig(cwd: string, trusted: boolean): LoadedConfig {
 		} catch (e) {
 			// Unreadable or invalid JSON: ignore all files, so every call asks.
 			errors.push(`${file}: ${(e as Error).message}`);
+
 			return { cfg: defaultConfig(), files, errors };
 		}
 	}
+
 	return { cfg: mergeConfigs(...layers), files, errors };
 }
 
@@ -95,6 +102,7 @@ export default function (pi: ExtensionAPI) {
 
 	function notifyErrors(ctx: ExtensionContext, errors: string[]): void {
 		const text = errors.join("\n");
+
 		if (!text || text === lastErrors || !ctx.hasUI) return;
 		lastErrors = text;
 		ctx.ui.notify(sanitize(`permissions: configuration errors\n${text}`), "warning");
@@ -103,6 +111,7 @@ export default function (pi: ExtensionAPI) {
 	/** "session", "persistent", or undefined when the extension is active for `dir`. */
 	function offMode(dir: string, errors: string[]): "session" | "persistent" | undefined {
 		if (sessionOff.has(dir)) return "session";
+
 		return readState(STATE_FILE, errors).disabled[dir] ? "persistent" : undefined;
 	}
 
@@ -117,6 +126,7 @@ export default function (pi: ExtensionAPI) {
 		if (!entry.data) return undefined;
 		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
 		box.addChild(new Text(renderSummary(entry.data, theme).join("\n"), 0, 0));
+
 		return box;
 	});
 
@@ -134,6 +144,7 @@ export default function (pi: ExtensionAPI) {
 
 		const off = offMode(cwd, errors);
 		updateStatus(ctx, off);
+
 		if (off) return undefined; // classic Pi: no checks at all
 
 		const { cfg, errors: configErrors } = loadConfig(cwd, ctx.isProjectTrusted());
@@ -141,43 +152,57 @@ export default function (pi: ExtensionAPI) {
 
 		const input = event.input as Record<string, unknown>;
 		const protectedPaths = [GLOBAL_CONFIG, STATE_FILE, path.join(cwd, PROJECT_CONFIG)];
+
 		if (EXTENSION_ROOT) protectedPaths.push(EXTENSION_ROOT);
 		const d = decide(cfg, event.toolName, input, { cwd, protectedPaths });
+
 		if (d.action === "allow") return undefined;
 
 		const why = d.reasons.map(formatReason).join("\n");
+
 		if (d.action === "deny") {
 			if (ctx.hasUI) ctx.ui.notify(sanitize(`⛔ Blocked: ${event.toolName}\n${why}`), "warning");
+
 			return { block: true, reason: `Blocked by permission policy:\n${why}` };
 		}
 
 		const target: CallTarget = { tool: event.toolName, input, absPath: d.absPath, protected: d.protected };
+
 		if (sessionGrants.some((g) => grantMatches(g, target))) return undefined;
+
 		if (!ctx.hasUI) return { block: true, reason: `Requires confirmation but no UI is available:\n${why}` };
 
 		const body = buildBody(event.toolName, input, d.absPath, d.reasons, bodyDeps(ctx.ui.theme), d.requestedPath);
 		const choices = grantChoices(target);
 		const choice = await ask(ctx, `🔐 ${event.toolName} requires permission`, body, cfg.ui.position, choices);
+
 		if (choice.key === NO.key) return { block: true, reason: DENIED_REASON };
+
 		if (choice.key === TELL.key) return { block: true, reason: toldReason(choice.text ?? "") };
 		const granted = choices.find((c) => c.key === choice.key)?.grant;
+
 		if (granted) sessionGrants.push(granted);
+
 		return undefined;
 	});
 
 	async function turnOff(ctx: ExtensionContext, dir: string, sessionOnly: boolean): Promise<void> {
 		const scope = sessionOnly ? "until this session ends" : "until you run /permissions on";
+
 		const ok = await ctx.ui.confirm(
 			"Disable pi-permissions for this project?",
 			`${dir}\n\nEvery tool call will run without asking, like Pi without this extension, ${scope}.`,
 		);
+
 		if (!ok) return;
+
 		if (sessionOnly) {
 			sessionOff.add(dir);
 		} else {
 			const errors: string[] = [];
 			writeState(STATE_FILE, setDisabled(readState(STATE_FILE, errors), dir, true));
 		}
+
 		updateStatus(ctx, sessionOnly ? "session" : "persistent");
 		ctx.ui.notify(`pi-permissions disabled for ${dir} ${scope}`, "warning");
 	}
@@ -186,6 +211,7 @@ export default function (pi: ExtensionAPI) {
 		sessionOff.delete(dir);
 		const errors: string[] = [];
 		const state = readState(STATE_FILE, errors);
+
 		if (state.disabled[dir]) writeState(STATE_FILE, setDisabled(state, dir, false));
 		updateStatus(ctx, undefined);
 		ctx.ui.notify(`pi-permissions enabled for ${dir}`, "info");
@@ -196,6 +222,7 @@ export default function (pi: ExtensionAPI) {
 		const off = offMode(dir, errors);
 		const disabled = Object.keys(readState(STATE_FILE, errors).disabled);
 		const { cfg, files, errors: configErrors } = loadConfig(dir, ctx.isProjectTrusted());
+
 		const summary: Summary = {
 			dir,
 			off,
@@ -209,6 +236,7 @@ export default function (pi: ExtensionAPI) {
 			disabled,
 			errors: [...errors, ...configErrors],
 		};
+
 		pi.appendEntry<Summary>(SUMMARY_ENTRY, summary);
 	}
 
@@ -223,6 +251,7 @@ export default function (pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const dir = projectDir(ctx);
 			const [sub = "", ...flags] = args.trim().split(/\s+/).filter(Boolean);
+
 			try {
 				if (sub === "" && flags.length === 0) show(ctx, dir);
 				else if (sub === "reset" && flags.length === 0) {
@@ -274,28 +303,34 @@ async function ask(
 		const labels = options.map((o) => sanitize(o.label));
 		const picked = await ctx.ui.select(sanitize(`${title}\n\n${plainBody(body, FALLBACK_MAX_LINES)}`), labels);
 		const key = options[labels.indexOf(picked ?? "")]?.key ?? NO.key;
+
 		if (key !== TELL.key) return { key };
 		const text = (await ctx.ui.input("Tell pi what to do instead", "what should pi do instead?"))?.trim();
+
 		return text ? { key, text } : DENY;
 	}
 
 	const signal = ctx.signal;
+
 	if (signal?.aborted) return DENY;
 	const layout = LAYOUTS[position];
 
 	return ctx.ui.custom<Answer>(
 		(tui, theme, _keybindings, done) => {
 			let finished = false;
+
 			const finish = (key: string, text?: string) => {
 				if (finished) return;
 				finished = true;
 				signal?.removeEventListener("abort", onAbort);
 				done(text === undefined ? { key } : { key, text });
 			};
+
 			// An aborted agent run closes the prompt as a denial.
 			const onAbort = () => finish(NO.key);
 			signal?.addEventListener("abort", onAbort, { once: true });
 			const options = { maxHeightRatio: layout.maxHeightRatio, choices };
+
 			return new PermissionPrompt(tui, theme, title, body, options, finish);
 		},
 		layout.overlay ? { overlay: true, overlayOptions: layout.overlayOptions } : undefined,

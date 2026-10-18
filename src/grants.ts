@@ -19,6 +19,7 @@ export interface GrantChoice {
 }
 
 const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read", "ls", "find", "grep"]);
+
 /** Path segments kept when shortening a path for a button label. */
 const LABEL_SEGMENTS = 2;
 
@@ -38,6 +39,7 @@ function scopeDir(absPath: string): string {
 	} catch {
 		// does not exist yet (e.g. a new file)
 	}
+
 	return path.dirname(absPath);
 }
 
@@ -52,6 +54,7 @@ export function grantMatches(grant: Grant, target: CallTarget): boolean {
 		case "dir": {
 			if (grant.tool !== target.tool || !target.absPath || target.protected) return false;
 			const p = target.absPath;
+
 			return grant.recursive ? isInside(p, grant.dir) : p === grant.dir || path.dirname(p) === grant.dir;
 		}
 	}
@@ -62,7 +65,9 @@ export function shortPath(p: string): string {
 	const home = os.homedir();
 	const short = p === home || p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p;
 	const parts = short.split("/").filter(Boolean);
+
 	if (parts.length <= LABEL_SEGMENTS + 1) return short;
+
 	return `…/${parts.slice(-LABEL_SEGMENTS).join("/")}`;
 }
 
@@ -70,6 +75,7 @@ export function shortPath(p: string): string {
 export function describeGrant(grant: Grant): string {
 	const home = os.homedir();
 	const tilde = (p: string) => (p === home || p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p);
+
 	switch (grant.kind) {
 		case "command":
 			return `bash: ${grant.command}`;
@@ -85,21 +91,27 @@ export function describeGrant(grant: Grant): string {
 /** The "always" options offered for a call, each with an explicit label. */
 export function grantChoices(target: CallTarget): GrantChoice[] {
 	const { tool, absPath } = target;
+
 	if (tool === "bash") {
 		const command = String(target.input.command ?? "");
+
 		return [{ key: "a", label: "Always: this exact command", grant: { kind: "command", command } }];
 	}
+
 	if (!absPath) return [{ key: "a", label: `Always: ${tool} (any input)`, grant: { kind: "tool", tool } }];
 
 	const dir = scopeDir(absPath);
+
 	const recursive: GrantChoice = {
 		key: "d",
 		label: `Always: ${tool} in ${shortPath(dir)}/ and subfolders`,
 		grant: { kind: "dir", tool, dir, recursive: true },
 	};
+
 	const narrow: GrantChoice = READ_ONLY_TOOLS.has(tool)
 		? { key: "a", label: `Always: ${tool} in ${shortPath(dir)}/`, grant: { kind: "dir", tool, dir, recursive: false } }
 		: { key: "a", label: `Always: ${tool} ${shortPath(absPath)}`, grant: { kind: "file", tool, path: absPath } };
+
 	// Directory grants never cover protected files, so do not offer one for them.
 	return target.protected ? [narrow] : [narrow, recursive];
 }

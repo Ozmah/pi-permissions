@@ -32,13 +32,16 @@ function highlightLines(raw: string, lang: string | undefined, deps: BodyDeps): 
 	if (!lang || !deps.highlight) return undefined;
 	const clean = sanitize(raw);
 	const count = clean.split("\n").length;
+
 	if (count > HIGHLIGHT_MAX_LINES) return undefined;
 	let out: string[] | undefined;
+
 	try {
 		out = deps.highlight(clean, lang);
 	} catch {
 		return undefined;
 	}
+
 	// Only use output that maps 1:1 to input lines.
 	return out?.length === count ? out.map(onlySgr) : undefined;
 }
@@ -46,8 +49,10 @@ function highlightLines(raw: string, lang: string | undefined, deps: BodyDeps): 
 function bashBody(input: Record<string, unknown>, deps: BodyDeps): BodyLine[] {
 	const lines: BodyLine[] = [heading("Command")];
 	let first = true;
+
 	for (const text of displayLines(parseShell(String(input.command ?? "")))) {
 		const highlighted = highlightLines(text, "bash", deps);
+
 		for (const piece of highlighted ?? [text]) {
 			lines.push({
 				text: piece,
@@ -59,7 +64,9 @@ function bashBody(input: Record<string, unknown>, deps: BodyDeps): BodyLine[] {
 			first = false;
 		}
 	}
+
 	if (typeof input.timeout === "number") lines.push({ text: `timeout: ${input.timeout}s`, color: "dim" });
+
 	return lines;
 }
 
@@ -67,17 +74,16 @@ function writeBody(content: string, lang: string | undefined, deps: BodyDeps): B
 	const highlighted = highlightLines(content, lang, deps);
 	const lines = highlighted ?? content.split("\n");
 	const width = String(lines.length).length;
+
 	return [
 		BLANK,
 		heading(`Content (${lines.length} lines)`),
-		...lines.map(
-			(text, i): BodyLine => ({
-				text,
-				styled: highlighted !== undefined,
-				prefix: `${String(i + 1).padStart(width)} │ `,
-				prefixColor: "dim",
-			}),
-		),
+		...lines.map((text, i): BodyLine => ({
+			text,
+			styled: highlighted !== undefined,
+			prefix: `${String(i + 1).padStart(width)} │ `,
+			prefixColor: "dim",
+		})),
 	];
 }
 
@@ -85,9 +91,11 @@ function diffLines(raw: string, sign: "-" | "+", lang: string | undefined, deps:
 	const color = sign === "-" ? "toolDiffRemoved" : "toolDiffAdded";
 	const prefix = `${sign} `;
 	const highlighted = highlightLines(raw, lang, deps);
+
 	if (highlighted) {
 		return highlighted.map((text) => ({ text, styled: true, prefix, contPrefix: prefix, prefixColor: color }));
 	}
+
 	return raw.split("\n").map((text) => ({ text, prefix, contPrefix: prefix, color }));
 }
 
@@ -100,6 +108,7 @@ function editBody(edits: unknown[], lang: string | undefined, deps: BodyDeps): B
 		lines.push(...diffLines(String(e.oldText ?? ""), "-", lang, deps));
 		lines.push(...diffLines(String(e.newText ?? ""), "+", lang, deps));
 	});
+
 	return lines;
 }
 
@@ -107,13 +116,21 @@ function editBody(edits: unknown[], lang: string | undefined, deps: BodyDeps): B
 export function reasonSpans(r: Reason): Span[] {
 	const action: Span = { text: r.action, color: ACTION_COLOR[r.action] };
 	const muted = (text: string): Span => ({ text, color: "muted" });
+
 	const head: Span[] = [
 		{ text: r.subject, color: r.kind === "note" ? "warning" : "text" },
 		{ text: " → ", color: "dim" },
 	];
+
 	switch (r.kind) {
 		case "match":
-			return [...head, muted(`matched ${r.section} `), { text: `"${r.pattern}"`, color: "accent" }, muted(": "), action];
+			return [
+				...head,
+				muted(`matched ${r.section} `),
+				{ text: `"${r.pattern}"`, color: "accent" },
+				muted(": "),
+				action,
+			];
 		case "fallback":
 			return [
 				...head,
@@ -133,13 +150,16 @@ export function reasonSpans(r: Reason): Span[] {
 /** `Path: /real`, or `Path: /requested → /real (symlink)` when they differ. */
 function pathLine(absPath: string, requestedPath: string | undefined): BodyLine {
 	const line: BodyLine = { text: absPath, prefix: "Path: ", prefixColor: "dim" };
+
 	if (!requestedPath || requestedPath === absPath) return line;
+
 	const spans: Span[] = [
 		{ text: requestedPath, color: "text" },
 		{ text: " \u2192 ", color: "dim" },
 		{ text: absPath, color: "accent" },
 		{ text: " (symlink)", color: "dim" },
 	];
+
 	return { ...line, text: spans.map((s) => s.text).join(""), spans };
 }
 
@@ -159,12 +179,14 @@ export function buildBody(
 	} else if (absPath) {
 		const lang = deps.languageOf?.(absPath);
 		body.push(pathLine(absPath, requestedPath));
+
 		if (toolName === "write" && typeof input.content === "string") {
 			body.push(...writeBody(input.content, lang, deps));
 		} else if (toolName === "edit" && Array.isArray(input.edits)) {
 			body.push(...editBody(input.edits, lang, deps));
 		} else {
 			const { path: _path, ...rest } = input;
+
 			if (Object.keys(rest).length) body.push({ text: JSON.stringify(rest), color: "muted" });
 		}
 	} else {
@@ -172,7 +194,10 @@ export function buildBody(
 	}
 
 	body.push(BLANK, heading("Why"));
-	for (const r of reasons) body.push({ text: formatReason(r), spans: reasonSpans(r), prefix: "• ", prefixColor: "dim" });
+
+	for (const r of reasons)
+		body.push({ text: formatReason(r), spans: reasonSpans(r), prefix: "• ", prefixColor: "dim" });
+
 	return body;
 }
 
@@ -181,6 +206,8 @@ const SGR = /\x1b\[[0-9;]*m/g;
 /** Plain-text rendering for clients without the TUI (e.g. RPC), capped at `maxLines`. */
 export function plainBody(body: BodyLine[], maxLines: number): string {
 	const lines = body.flatMap((l) => `${l.prefix ?? ""}${l.styled ? l.text.replace(SGR, "") : l.text}`.split("\n"));
+
 	if (lines.length <= maxLines) return lines.join("\n");
+
 	return [...lines.slice(0, maxLines), `… ${lines.length - maxLines} more lines`].join("\n");
 }

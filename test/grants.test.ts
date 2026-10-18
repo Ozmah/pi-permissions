@@ -8,26 +8,36 @@ import { type CallTarget, describeGrant, grantChoices, grantMatches, shortPath }
 // Real directories so "is this path a directory" checks behave like in use.
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-permissions-grants-")));
 const clipboard = path.join(root, "soloterm-clipboard");
+
 fs.mkdirSync(path.join(clipboard, "nested"), { recursive: true });
+
 const shot = (name: string) => path.join(clipboard, name);
 
 const read = (absPath: string): CallTarget => ({ tool: "read", input: { path: absPath }, absPath });
+
 const edit = (absPath: string, isProtected = false): CallTarget => ({
 	tool: "edit",
 	input: { path: absPath },
 	absPath,
 	protected: isProtected,
 });
+
 const choice = (target: CallTarget, key: string) => grantChoices(target).find((c) => c.key === key);
 
 describe("grantChoices", () => {
 	it("offers exact command only for bash", () => {
 		const choices = grantChoices({ tool: "bash", input: { command: "ls" } });
-		assert.deepEqual(choices.map((c) => [c.key, c.label]), [["a", "Always: this exact command"]]);
+		assert.deepEqual(
+			choices.map((c) => [c.key, c.label]),
+			[["a", "Always: this exact command"]],
+		);
 	});
 
 	it("offers any-input for tools without a path", () => {
-		assert.deepEqual(grantChoices({ tool: "mcp__x", input: {} }).map((c) => c.label), ["Always: mcp__x (any input)"]);
+		assert.deepEqual(
+			grantChoices({ tool: "mcp__x", input: {} }).map((c) => c.label),
+			["Always: mcp__x (any input)"],
+		);
 	});
 
 	it("offers directory and directory+subfolders for read-only tools", () => {
@@ -52,7 +62,10 @@ describe("grantChoices", () => {
 	});
 
 	it("offers no directory option for protected files", () => {
-		assert.deepEqual(grantChoices(edit(shot("permissions.json"), true)).map((c) => c.key), ["a"]);
+		assert.deepEqual(
+			grantChoices(edit(shot("permissions.json"), true)).map((c) => c.key),
+			["a"],
+		);
 	});
 });
 

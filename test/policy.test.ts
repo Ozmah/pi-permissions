@@ -7,6 +7,7 @@ import { mergeConfigs } from "../src/config.ts";
 import { decide, formatReason, matches, resolvePath, resolveRules } from "../src/policy.ts";
 
 const home = os.homedir();
+
 // Resolved like the extension does (e.g. /tmp is a symlink on macOS).
 const cwd = resolvePath(path.join(os.tmpdir(), "pi-permissions-test-project"), "/");
 
@@ -96,6 +97,7 @@ describe("decide: protected paths", () => {
 	const config = path.join(cwd, ".pi", "permissions.json");
 	const extensionRoot = path.join(home, ".pi", "agent", "extensions", "pi-permissions");
 	const protectedPaths = [config, extensionRoot];
+
 	const run = (toolName: string, input: Record<string, unknown>) =>
 		decide(allowAll, toolName, input, { cwd, protectedPaths }).action;
 

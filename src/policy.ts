@@ -71,17 +71,21 @@ export function strictest(...actions: Action[]): Action {
 
 export function expandHome(p: string): string {
 	if (p === "~") return os.homedir();
+
 	if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
+
 	return p;
 }
 
 function globToRegex(glob: string): RegExp {
 	let re = "";
+
 	for (const ch of glob) {
 		if (ch === "*") re += ".*";
 		else if (ch === "?") re += ".";
 		else re += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
 	}
+
 	return new RegExp(`^${re}$`, "s");
 }
 
@@ -92,7 +96,9 @@ function globToRegex(glob: string): RegExp {
  */
 export function matches(pattern: string, value: string): boolean {
 	if (globToRegex(pattern).test(value)) return true;
+
 	if (pattern.endsWith(" *") || pattern.endsWith("/*")) return value === pattern.slice(0, -2);
+
 	return false;
 }
 
@@ -113,13 +119,16 @@ export function resolveRules(
 	normalizePattern: (p: string) => string = (p) => p,
 ): RuleHit | undefined {
 	let best: (RuleHit & { spec: number }) | undefined;
+
 	for (const [pattern, action] of Object.entries(rules)) {
 		if (!matches(normalizePattern(pattern), value)) continue;
 		const spec = specificity(pattern);
+
 		if (!best || spec > best.spec || (spec === best.spec && RANK[action] > RANK[best.action])) {
 			best = { action, pattern, spec };
 		}
 	}
+
 	return best && { action: best.action, pattern: best.pattern };
 }
 
@@ -132,12 +141,15 @@ export function resolvePath(p: string | undefined, cwd: string): string {
 	const abs = path.resolve(cwd, expandHome(p ?? "."));
 	let existing = abs;
 	const rest: string[] = [];
+
 	while (!fs.existsSync(existing)) {
 		const parent = path.dirname(existing);
+
 		if (parent === existing) return abs;
 		rest.unshift(path.basename(existing));
 		existing = parent;
 	}
+
 	try {
 		return path.join(fs.realpathSync(existing), ...rest);
 	} catch {
@@ -147,6 +159,7 @@ export function resolvePath(p: string | undefined, cwd: string): string {
 
 export function isInside(child: string, parent: string): boolean {
 	const rel = path.relative(parent, child);
+
 	return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
@@ -161,6 +174,7 @@ function snippet(s: string): string {
 /** Explains which rule produced an action. */
 function explain(subject: string, section: string, hit: RuleHit | undefined, action: Action): Reason {
 	if (hit && hit.pattern !== "*") return { kind: "match", subject, section, pattern: hit.pattern, action };
+
 	return { kind: hit ? "fallback" : "default", subject, section, action };
 }
 
@@ -171,6 +185,7 @@ function note(subject: string): Reason {
 function decideTool(cfg: PermissionConfig, toolName: string): Decision {
 	const hit = resolveRules(cfg.tools, toolName);
 	const action = hit?.action ?? cfg.default;
+
 	return { action, reasons: [explain(toolName, "tools", hit, action)] };
 }
 
@@ -178,15 +193,18 @@ function decidePath(cfg: PermissionConfig, absPath: string, cwd: string): Decisi
 	if (isInside(absPath, cwd)) return undefined;
 	const hit = resolveRules(cfg.external_directory, absPath, expandHome);
 	const action = hit?.action ?? "ask";
+
 	return { action, reasons: [explain("outside project", "external_directory", hit, action)] };
 }
 
 function decideBash(cfg: PermissionConfig, command: string, protectedPaths: string[]): Decision {
 	const { segments, risky } = parseShell(command);
+
 	if (segments.length === 0) return { action: "ask", reasons: [note("empty command")] };
 
 	let action: Action = "allow";
 	const reasons: Reason[] = [];
+
 	for (const seg of segments) {
 		const text = normalizeSegment(seg.text);
 		const hit = resolveRules(cfg.bash, text);
@@ -194,17 +212,21 @@ function decideBash(cfg: PermissionConfig, command: string, protectedPaths: stri
 		reasons.push(explain(`"${snippet(text)}"`, "bash", hit, a));
 		action = strictest(action, a);
 	}
+
 	if (risky.length) {
 		action = strictest(action, "ask");
 		reasons.push(note(`contains ${risky.join(", ")}`));
 	}
+
 	// Best effort: bash can write anywhere, so mentioning a protected path (absolute, or
 	// any `permissions.json`, which covers relative forms) requires confirmation.
 	const mentionsConfig = protectedPaths.some((p) => p.endsWith(CONFIG_NAME)) && command.includes(CONFIG_NAME);
+
 	if (mentionsConfig || protectedPaths.some((p) => command.includes(p))) {
 		action = strictest(action, "ask");
 		reasons.push(note("mentions a protected permission file"));
 	}
+
 	return { action, reasons };
 }
 
@@ -215,9 +237,11 @@ export function decide(
 	opts: DecideOptions,
 ): Decision {
 	const protectedPaths = opts.protectedPaths ?? [];
+
 	if (toolName === "bash") return decideBash(cfg, String(input.command ?? ""), protectedPaths);
 
 	const tool = decideTool(cfg, toolName);
+
 	if (!FILE_TOOLS.has(toolName)) return tool;
 
 	const rawPath = typeof input.path === "string" ? input.path : undefined;
@@ -227,16 +251,22 @@ export function decide(
 	const reasons = [...tool.reasons];
 
 	const outside = decidePath(cfg, absPath, opts.cwd);
+
 	if (outside) {
 		action = strictest(action, outside.action);
 		reasons.push(...outside.reasons);
 	}
+
 	const isProtected = WRITE_TOOLS.has(toolName) && protectedPaths.some((p) => isInside(absPath, p));
+
 	if (isProtected) {
 		action = strictest(action, "ask");
 		reasons.push(note("protected permission file"));
 	}
+
 	const result: Decision = { action, reasons, absPath, requestedPath };
+
 	if (isProtected) result.protected = true;
+
 	return result;
 }

@@ -18,6 +18,7 @@ export interface PromptChoice {
 /** Always offered first: Enter on open means Yes. */
 export const YES: PromptChoice = { key: "y", label: "Yes" };
 export const NO: PromptChoice = { key: "n", label: "No" };
+
 /** Denies and opens a one-line input; the prompt resolves with the typed text. */
 export const TELL: PromptChoice = { key: "t", label: "No, tell pi what to do" };
 
@@ -65,6 +66,7 @@ export interface PromptOptions {
 
 /** Fixed rows besides the options: top border, separator, hint, bottom border. */
 const FRAME_ROWS = 4;
+
 /** Smallest body height worth showing. */
 const MIN_BODY_ROWS = 3;
 const FALLBACK_TERMINAL_ROWS = 40;
@@ -76,8 +78,10 @@ export function wrapPlain(text: string, width: number): string[] {
 	let line = "";
 	let lineWidth = 0;
 	let lastSpace = -1;
+
 	for (const ch of text) {
 		const w = visibleWidth(ch);
+
 		if (lineWidth + w > width) {
 			if (ch === " ") {
 				// Overflow lands on a space: break here and drop it.
@@ -87,6 +91,7 @@ export function wrapPlain(text: string, width: number): string[] {
 				lastSpace = -1;
 				continue;
 			}
+
 			if (lastSpace > 0) {
 				out.push(line.slice(0, lastSpace));
 				line = line.slice(lastSpace + 1);
@@ -94,14 +99,18 @@ export function wrapPlain(text: string, width: number): string[] {
 				out.push(line);
 				line = "";
 			}
+
 			lineWidth = visibleWidth(line);
 			lastSpace = -1;
 		}
+
 		if (ch === " ") lastSpace = line.length;
 		line += ch;
 		lineWidth += w;
 	}
+
 	if (line) out.push(line);
+
 	return out;
 }
 
@@ -145,6 +154,7 @@ export class PermissionPrompt implements Component, Focusable {
 
 	set focused(value: boolean) {
 		this.isFocused = value;
+
 		if (this.input) this.input.focused = value;
 	}
 
@@ -167,17 +177,22 @@ export class PermissionPrompt implements Component, Focusable {
 		const label = this.theme.fg("accent", "Tell pi: ");
 		const field = input.render(Math.max(1, inner - visibleWidth(label)))[0] ?? "";
 		const content = label + field;
+
 		return content + " ".repeat(Math.max(0, inner - visibleWidth(content)));
 	}
 
 	/** Option labels on one row when they fit, otherwise one per row. */
 	private optionRows(inner: number): string[] {
 		const t = this.theme;
+
 		const labels = this.choices.map((c, i) => {
 			const label = ` [${c.key}] ${sanitize(c.label)} `; // labels can contain agent-provided paths
+
 			return i === this.selected ? t.bg("selectedBg", t.bold(t.fg("accent", label))) : t.fg("muted", label);
 		});
+
 		const single = labels.join("  ");
+
 		return visibleWidth(single) <= inner ? [single] : labels;
 	}
 
@@ -189,6 +204,7 @@ export class PermissionPrompt implements Component, Focusable {
 		if (this.wrapCache?.width === inner) return this.wrapCache.rows;
 		const t = this.theme;
 		const rows: string[] = [];
+
 		for (const line of this.body) {
 			const color = line.color ?? "text";
 			const prefix = line.prefix ?? "";
@@ -198,23 +214,29 @@ export class PermissionPrompt implements Component, Focusable {
 			let first = true;
 			// Colored lines (highlighted code, spans) wrap ANSI-aware; plain lines are colored per chunk.
 			const colored = line.styled || line.spans !== undefined;
+
 			const text = line.spans
 				? line.spans.map((s) => t.fg(s.color, sanitize(s.text))).join("")
 				: line.styled
 					? line.text
 					: sanitize(line.text);
+
 			for (const piece of text.split("\n")) {
 				const chunks = colored ? wrapTextWithAnsi(piece, avail) : wrapPlain(piece, avail);
+
 				for (const chunk of chunks.length ? chunks : [""]) {
 					const p = first ? prefix : cont;
 					let content = chunk;
+
 					if (!colored) content = line.heading ? t.bold(t.fg(color, chunk)) : t.fg(color, chunk);
 					rows.push((p ? t.fg(prefixColor, p) : "") + content);
 					first = false;
 				}
 			}
 		}
+
 		this.wrapCache = { width: inner, rows };
+
 		return rows;
 	}
 
@@ -249,11 +271,13 @@ export class PermissionPrompt implements Component, Focusable {
 		const hint = this.input
 			? "Enter send · Esc back to options"
 			: overflow
-			? "↑↓ PgUp PgDn scroll · ←→ select · Enter confirm · Esc deny"
-			: "←→ select · Enter confirm · Esc deny";
+				? "↑↓ PgUp PgDn scroll · ←→ select · Enter confirm · Esc deny"
+				: "←→ select · Enter confirm · Esc deny";
+
 		out.push(row(t.fg("dim", hint)));
 
 		out.push(border(`└${"─".repeat(Math.max(0, width - 2))}┘`));
+
 		return out;
 	}
 
@@ -285,9 +309,12 @@ export class PermissionPrompt implements Component, Focusable {
 				this.input.handleInput(data);
 				this.tui.requestRender();
 			}
+
 			return;
 		}
+
 		const page = Math.max(1, this.bodyHeight - 1);
+
 		if (matchesKey(data, Key.up)) this.scrollBy(-1);
 		else if (matchesKey(data, Key.down)) this.scrollBy(1);
 		else if (matchesKey(data, Key.pageUp)) this.scrollBy(-page);
@@ -300,6 +327,7 @@ export class PermissionPrompt implements Component, Focusable {
 		else if (matchesKey(data, Key.escape)) this.done(NO.key);
 		else {
 			const direct = this.choices.find((c) => data.toLowerCase() === c.key);
+
 			if (direct) this.choose(direct.key);
 		}
 	}
@@ -307,6 +335,7 @@ export class PermissionPrompt implements Component, Focusable {
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (event.type !== "wheel" || !event.wheelDelta) return undefined;
 		this.scrollBy(event.wheelDelta);
+
 		return { handled: true };
 	}
 }

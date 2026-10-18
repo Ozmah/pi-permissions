@@ -42,6 +42,7 @@ const LABEL_WIDTH = 10;
 function display(text: string): string {
 	const home = os.homedir();
 	const short = text === home || text.startsWith(`${home}/`) ? `~${text.slice(home.length)}` : text;
+
 	return sanitize(short);
 }
 
@@ -58,6 +59,7 @@ export function renderSummary(s: Summary, t: SummaryTheme): string[] {
 	const status = s.off
 		? t.bold(t.fg("error", s.off === "session" ? "● off (this session)" : "● off"))
 		: t.bold(t.fg("success", "● on"));
+
 	const lines = [`${heading("pi-permissions")}  ${status}  ${t.fg("dim", display(s.dir))}`, ""];
 
 	if (s.off) {
@@ -66,6 +68,7 @@ export function renderSummary(s: Summary, t: SummaryTheme): string[] {
 
 	const files = s.files.length ? s.files.map(display) : [];
 	lines.push(`${label("Config")}${files[0] ?? t.fg("warning", "none, everything asks")}`);
+
 	for (const f of files.slice(1)) lines.push(`${" ".repeat(LABEL_WIDTH)}${f}`);
 	lines.push(`${label("Default")}${action(s.default)}`);
 	lines.push(`${label("Prompt")}${s.position}`);
@@ -73,27 +76,36 @@ export function renderSummary(s: Summary, t: SummaryTheme): string[] {
 	const section = (title: string, rules: RuleMap) => {
 		lines.push("", heading(title));
 		const entries = Object.entries(rules);
+
 		if (!entries.length) {
 			lines.push(`  ${none}`);
+
 			return;
 		}
+
 		const width = Math.max(...entries.map(([p]) => visibleWidth(display(p)))) + 2;
+
 		for (const [pattern, a] of entries) lines.push(`  ${pad(display(pattern), width)}${action(a)}`);
 	};
+
 	section("Tools", s.tools);
 	section("External directories", s.external_directory);
 	section("Bash", s.bash);
 
 	const list = (title: string, items: string[]) => {
 		lines.push("", heading(title));
+
 		if (!items.length) lines.push(`  ${none}`);
+
 		for (const item of items) lines.push(`  ${display(item)}`);
 	};
+
 	list("Session grants", s.grants);
 	list("Disabled projects", s.disabled);
 
 	if (s.errors.length) {
 		lines.push("", t.bold(t.fg("error", "Errors")));
+
 		for (const e of s.errors) lines.push(`  ${t.fg("error", display(e))}`);
 	}
 
@@ -101,5 +113,6 @@ export function renderSummary(s: Summary, t: SummaryTheme): string[] {
 	const usages = COMMANDS.map((c) => (c.args ? `/permissions ${c.args}` : "/permissions"));
 	const width = Math.max(...usages.map((u) => u.length)) + 3;
 	COMMANDS.forEach((c, i) => lines.push(`  ${t.fg("accent", pad(usages[i], width))}${t.fg("muted", c.description)}`));
+
 	return lines;
 }

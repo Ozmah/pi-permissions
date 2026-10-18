@@ -60,7 +60,15 @@ describe("parseShell: risky constructs", () => {
 	});
 
 	it("flags redirection to a file", () => {
-		for (const cmd of ["echo x > f", "echo x >> f", "echo x >| f", "echo x 2> f", "echo x &> f", "echo x >&f", "echo x >& f"]) {
+		for (const cmd of [
+			"echo x > f",
+			"echo x >> f",
+			"echo x >| f",
+			"echo x 2> f",
+			"echo x &> f",
+			"echo x >&f",
+			"echo x >& f",
+		]) {
 			assert.deepEqual(risky(cmd), ["redirection to file"], cmd);
 		}
 	});

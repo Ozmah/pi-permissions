@@ -23,20 +23,27 @@ export function emptyState(): PermissionState {
  */
 export function readState(file: string, errors: string[]): PermissionState {
 	if (!fs.existsSync(file)) return emptyState();
+
 	try {
 		const raw: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
 		const disabled = (raw as { disabled?: unknown } | null)?.disabled;
+
 		if (typeof disabled !== "object" || disabled === null || Array.isArray(disabled)) {
-			throw new Error("missing or invalid \"disabled\" object");
+			throw new Error('missing or invalid "disabled" object');
 		}
+
 		const state = emptyState();
+
 		for (const [dir, entry] of Object.entries(disabled)) {
 			const since = (entry as { since?: unknown } | null)?.since;
+
 			if (path.isAbsolute(dir)) state.disabled[dir] = { since: typeof since === "string" ? since : "" };
 		}
+
 		return state;
 	} catch (e) {
 		errors.push(`${file}: ${(e as Error).message} (ignored, permissions stay enabled)`);
+
 		return emptyState();
 	}
 }
@@ -51,7 +58,9 @@ export function writeState(file: string, state: PermissionState): void {
 
 export function setDisabled(state: PermissionState, dir: string, disabled: boolean, now = new Date()): PermissionState {
 	const next: PermissionState = { version: 1, disabled: { ...state.disabled } };
+
 	if (disabled) next.disabled[dir] = { since: now.toISOString() };
 	else delete next.disabled[dir];
+
 	return next;
 }

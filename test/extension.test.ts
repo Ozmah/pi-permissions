@@ -6,12 +6,17 @@ import { before, beforeEach, describe, it } from "node:test";
 
 // Isolate from the real ~/.pi: point HOME at a temp dir before loading the extension.
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-permissions-home-"));
+
 process.env.HOME = home;
+
 const agentDir = path.join(home, ".pi", "agent");
 const configFile = path.join(agentDir, "permissions.json");
 const stateFile = path.join(agentDir, "permissions-state.json");
+
 fs.mkdirSync(path.join(home, "project"));
+
 fs.mkdirSync(agentDir, { recursive: true });
+
 // Resolved like the extension does (e.g. /tmp is a symlink on macOS).
 const project = fs.realpathSync(path.join(home, "project"));
 
@@ -19,10 +24,12 @@ const baseConfig = { tools: { read: "allow" }, bash: { "git status *": "allow", 
 const writeConfig = (extra: object = {}) => fs.writeFileSync(configFile, JSON.stringify({ ...baseConfig, ...extra }));
 
 type Handler = (event: unknown, ctx: unknown) => Promise<unknown>;
+
 interface Command {
 	handler: (args: string, ctx: unknown) => Promise<void>;
 	getArgumentCompletions: (prefix: string) => { value: string }[];
 }
+
 const handlers: Record<string, Handler> = {};
 const commands: Record<string, Command> = {};
 const renderers: Record<string, Function> = {};
@@ -70,7 +77,17 @@ interface FakeCtxOptions {
 const status: Record<string, string | undefined> = {};
 const notes: string[] = [];
 
-function ctx({ mode = "tui", hasUI = true, key, keys, inputText, selectIndex = 0, signal, confirm = true, onCustom }: FakeCtxOptions = {}) {
+function ctx({
+	mode = "tui",
+	hasUI = true,
+	key,
+	keys,
+	inputText,
+	selectIndex = 0,
+	signal,
+	confirm = true,
+	onCustom,
+}: FakeCtxOptions = {}) {
 	return {
 		mode,
 		hasUI,
@@ -91,7 +108,9 @@ function ctx({ mode = "tui", hasUI = true, key, keys, inputText, selectIndex = 0
 					onCustom?.(options);
 					const component = factory({ terminal: { rows: 30 }, requestRender() {} }, theme, {}, resolve);
 					component.render(80);
+
 					if (key) component.handleInput(key);
+
 					for (const k of keys ?? []) component.handleInput(k);
 				}),
 		},
@@ -277,6 +296,7 @@ describe("symlinks", () => {
 			custom((tui: unknown, th: unknown, kb: unknown, done: Function) => {
 				const component = factory(tui, th, kb, done);
 				rendered = component.render(200).join("\n");
+
 				return component;
 			}, options);
 		assert.equal(await call("read", { path: path.join(etc, "os-release") }, c), undefined);

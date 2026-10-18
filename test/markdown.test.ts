@@ -4,6 +4,7 @@ import { type MarkdownTheme, highlightMarkdown } from "../src/markdown.ts";
 
 /** Marks colors as <color:text> and bold as *text* so tests can check them. */
 const t: MarkdownTheme = { fg: (c, s) => `<${c}:${s}>`, bold: (s) => `*${s}*` };
+
 const hl = (text: string, fence?: (code: string, lang: string) => string[] | undefined) =>
 	highlightMarkdown(text, t, fence);
 

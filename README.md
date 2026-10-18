@@ -30,13 +30,13 @@ Run `/permissions` to see the active rules, session grants and available command
 }
 ```
 
-| Key | Applies to |
-|---|---|
-| `default` | Anything no rule matches. Default `ask`. |
-| `tools` | Tools by name: `read`, `write`, `edit`, `ls`, `find`, `grep`, MCP and extension tools. |
-| `external_directory` | Paths outside the working directory. Unmatched paths ask. |
-| `bash` | Each segment of a bash command. |
-| `ui.position` | `editor` (replaces the input), `center` or `top`. |
+| Key                  | Applies to                                                                             |
+| -------------------- | -------------------------------------------------------------------------------------- |
+| `default`            | Anything no rule matches. Default `ask`.                                               |
+| `tools`              | Tools by name: `read`, `write`, `edit`, `ls`, `find`, `grep`, MCP and extension tools. |
+| `external_directory` | Paths outside the working directory. Unmatched paths ask.                              |
+| `bash`               | Each segment of a bash command.                                                        |
+| `ui.position`        | `editor` (replaces the input), `center` or `top`.                                      |
 
 Values: `allow`, `ask`, `deny`.
 
@@ -52,24 +52,24 @@ Values: `allow`, `ask`, `deny`.
 
 ## Prompt
 
-| Key | Action |
-|---|---|
-| `Enter` | Selected option (`Yes` by default) |
-| `y` / `n` | Yes / No |
-| `t` | No, and tell pi what to do instead (one line, `Esc` goes back) |
-| `a` / `d` | Always, for the rest of the session |
-| `←` `→` `Tab` | Change selection |
-| `↑` `↓` `PgUp` `PgDn` `Home` `End`, wheel | Scroll |
-| `Esc` | No |
+| Key                                       | Action                                                         |
+| ----------------------------------------- | -------------------------------------------------------------- |
+| `Enter`                                   | Selected option (`Yes` by default)                             |
+| `y` / `n`                                 | Yes / No                                                       |
+| `t`                                       | No, and tell pi what to do instead (one line, `Esc` goes back) |
+| `a` / `d`                                 | Always, for the rest of the session                            |
+| `←` `→` `Tab`                             | Change selection                                               |
+| `↑` `↓` `PgUp` `PgDn` `Home` `End`, wheel | Scroll                                                         |
+| `Esc`                                     | No                                                             |
 
 Each "always" option states what it covers:
 
-| Tool | `a` | `d` |
-|---|---|---|
-| `read`, `ls`, `find`, `grep` | That directory | That directory and subfolders |
-| `write`, `edit` | That file | That directory and subfolders |
-| `bash` | That exact command | - |
-| Tools without a path | Any input | - |
+| Tool                         | `a`                | `d`                           |
+| ---------------------------- | ------------------ | ----------------------------- |
+| `read`, `ls`, `find`, `grep` | That directory     | That directory and subfolders |
+| `write`, `edit`              | That file          | That directory and subfolders |
+| `bash`                       | That exact command | -                             |
+| Tools without a path         | Any input          | -                             |
 
 Grants live in memory and end with the session. They never cover protected files, and `deny` rules still apply.
 

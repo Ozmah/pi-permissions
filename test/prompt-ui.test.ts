@@ -16,13 +16,32 @@ function tui(rows = 20): TUI {
 function prompt(lines: number, rows = 20) {
 	let result: string | undefined;
 	const body = Array.from({ length: lines }, (_, i) => ({ text: `line ${i}` }));
-	const p = new PermissionPrompt(tui(rows), theme, "🔐 bash requires permission", body, { maxHeightRatio: 0.85, choices: ALWAYS }, (c) => {
-		result = c;
-	});
+
+	const p = new PermissionPrompt(
+		tui(rows),
+		theme,
+		"🔐 bash requires permission",
+		body,
+		{ maxHeightRatio: 0.85, choices: ALWAYS },
+		(c) => {
+			result = c;
+		},
+	);
+
 	return { p, result: () => result };
 }
 
-const KEY = { up: "\x1b[A", down: "\x1b[B", right: "\x1b[C", left: "\x1b[D", pageDown: "\x1b[6~", end: "\x1b[F", enter: "\r", esc: "\x1b" };
+const KEY = {
+	up: "\x1b[A",
+	down: "\x1b[B",
+	right: "\x1b[C",
+	left: "\x1b[D",
+	pageDown: "\x1b[6~",
+	end: "\x1b[F",
+	enter: "\r",
+	esc: "\x1b",
+};
+
 const ALWAYS = [{ key: "a", label: "Always: this exact command" }];
 
 describe("sanitize", () => {
@@ -63,12 +82,21 @@ describe("buildBody: syntax highlighting", () => {
 	it("keeps plain red/green text when the language is unknown", () => {
 		const body = buildBody("edit", { path: "x", edits: [{ oldText: "a", newText: "b" }] }, "/p/x.unknown", [], deps);
 		const diff = body.filter((l) => l.prefix === "- " || l.prefix === "+ ");
-		assert.deepEqual(diff.map((l) => [l.styled, l.color]), [[undefined, "toolDiffRemoved"], [undefined, "toolDiffAdded"]]);
+		assert.deepEqual(
+			diff.map((l) => [l.styled, l.color]),
+			[
+				[undefined, "toolDiffRemoved"],
+				[undefined, "toolDiffAdded"],
+			],
+		);
 	});
 
 	it("highlights bash commands and written content", () => {
 		const bash = buildBody("bash", { command: "ls && pwd" }, undefined, [], deps);
-		assert.deepEqual(bash.filter((l) => l.styled).map((l) => l.text), ["\x1b[35mbash:ls\x1b[0m", "\x1b[35mbash:&& pwd\x1b[0m"]);
+		assert.deepEqual(
+			bash.filter((l) => l.styled).map((l) => l.text),
+			["\x1b[35mbash:ls\x1b[0m", "\x1b[35mbash:&& pwd\x1b[0m"],
+		);
 		const write = buildBody("write", { path: "a.ts", content: "x" }, "/p/a.ts", [], deps);
 		assert.ok(write.some((l) => l.styled && l.text.includes("typescript:x")));
 	});
@@ -81,7 +109,12 @@ describe("buildBody: syntax highlighting", () => {
 	});
 
 	it("falls back to plain text when the highlighter throws or misaligns", () => {
-		const throwing = { highlight: () => { throw new Error("boom"); } };
+		const throwing = {
+			highlight: () => {
+				throw new Error("boom");
+			},
+		};
+
 		assert.ok(!buildBody("bash", { command: "ls" }, undefined, [], throwing).some((l) => l.styled));
 		const misaligned = { highlight: () => ["one", "two"] };
 		assert.ok(!buildBody("bash", { command: "ls" }, undefined, [], misaligned).some((l) => l.styled));
@@ -90,6 +123,7 @@ describe("buildBody: syntax highlighting", () => {
 	it("renders highlighted lines within the width", () => {
 		const body = buildBody("bash", { command: `echo ${"word ".repeat(40)}` }, undefined, [], deps);
 		const p = new PermissionPrompt(tui(60), theme, "t", body, { maxHeightRatio: 0.85, choices: [] }, () => {});
+
 		for (const row of p.render(40)) assert.equal(visibleWidth(row), 40);
 	});
 });
@@ -108,6 +142,7 @@ describe("PermissionPrompt rendering", () => {
 	for (const width of [40, 70, 120]) {
 		it(`fills exactly ${width} columns on every row`, () => {
 			const rows = prompt(50).p.render(width);
+
 			for (const row of rows) assert.equal(visibleWidth(row), width);
 		});
 	}
@@ -121,8 +156,16 @@ describe("PermissionPrompt rendering", () => {
 	});
 
 	it("shows the scroll position only when content overflows", () => {
-		assert.ok(prompt(200).p.render(70).some((r) => r.includes("/ 200")));
-		assert.ok(!prompt(3).p.render(70).some((r) => r.includes(" / ")));
+		assert.ok(
+			prompt(200)
+				.p.render(70)
+				.some((r) => r.includes("/ 200")),
+		);
+		assert.ok(
+			!prompt(3)
+				.p.render(70)
+				.some((r) => r.includes(" / ")),
+		);
 	});
 
 	it("wraps long lines instead of cutting them", () => {
@@ -167,7 +210,11 @@ describe("PermissionPrompt input", () => {
 	});
 
 	it("answers directly with y / n / a", () => {
-		for (const [key, choice] of [["y", "y"], ["N", "n"], ["a", "a"]] as const) {
+		for (const [key, choice] of [
+			["y", "y"],
+			["N", "n"],
+			["a", "a"],
+		] as const) {
 			const { p, result } = prompt(3);
 			p.handleInput(key);
 			assert.equal(result(), choice);
@@ -214,7 +261,13 @@ describe("reasonSpans", () => {
 	];
 
 	it("joins to exactly the plain text the model receives", () => {
-		for (const r of reasons) assert.equal(reasonSpans(r).map((s) => s.text).join(""), formatReason(r));
+		for (const r of reasons)
+			assert.equal(
+				reasonSpans(r)
+					.map((s) => s.text)
+					.join(""),
+				formatReason(r),
+			);
 	});
 
 	it("colors the action by meaning and highlights the pattern", () => {
@@ -228,10 +281,25 @@ describe("reasonSpans", () => {
 	});
 
 	it("renders colored reasons within the width and sanitizes them", () => {
-		const evil: Reason = { kind: "fallback", subject: `"echo \x1b[2J ${"x".repeat(80)}"`, section: "bash", action: "ask" };
+		const evil: Reason = {
+			kind: "fallback",
+			subject: `"echo \x1b[2J ${"x".repeat(80)}"`,
+			section: "bash",
+			action: "ask",
+		};
+
 		const colorTheme: PromptTheme = { fg: (_c, t) => `\x1b[33m${t}\x1b[0m`, bg: (_c, t) => t, bold: (t) => t };
 		const body = buildBody("bash", { command: "ls" }, undefined, [evil]);
-		const rows = new PermissionPrompt(tui(40), colorTheme, "t", body, { maxHeightRatio: 0.85, choices: [] }, () => {}).render(50);
+
+		const rows = new PermissionPrompt(
+			tui(40),
+			colorTheme,
+			"t",
+			body,
+			{ maxHeightRatio: 0.85, choices: [] },
+			() => {},
+		).render(50);
+
 		for (const row of rows) assert.equal(visibleWidth(row), 50);
 		const text = rows.join("");
 		assert.ok(text.includes("\u241b[2J"));
@@ -244,10 +312,12 @@ describe("PermissionPrompt options", () => {
 		{ key: "a", label: "Always: read in …/Temp/soloterm-clipboard/" },
 		{ key: "d", label: "Always: read in …/Temp/soloterm-clipboard/ and subfolders" },
 	];
+
 	const make = (width: number, choices = four) => {
 		let result: string | undefined;
 		const body = [{ text: "x" }];
 		const p = new PermissionPrompt(tui(30), theme, "t", body, { maxHeightRatio: 0.85, choices }, (k) => (result = k));
+
 		return { p, rows: p.render(width), result: () => result };
 	};
 
@@ -259,9 +329,14 @@ describe("PermissionPrompt options", () => {
 
 	it("stacks options one per row when they do not fit, without cutting them", () => {
 		const { rows } = make(80);
+
 		for (const label of ["[y] Yes", "[n] No", "[a] Always: read in", "and subfolders"]) {
-			assert.ok(rows.some((r) => r.includes(label)), label);
+			assert.ok(
+				rows.some((r) => r.includes(label)),
+				label,
+			);
 		}
+
 		for (const row of rows) assert.equal(visibleWidth(row), 80);
 	});
 
@@ -308,11 +383,21 @@ describe("buildBody: path line", () => {
 describe("PermissionPrompt: tell pi what to do", () => {
 	const open = () => {
 		let result: { key: string; text?: string } | undefined;
-		const p = new PermissionPrompt(tui(30), theme, "t", [{ text: "x" }], { maxHeightRatio: 0.85, choices: [] }, (key, text) => {
-			result = { key, text };
-		});
+
+		const p = new PermissionPrompt(
+			tui(30),
+			theme,
+			"t",
+			[{ text: "x" }],
+			{ maxHeightRatio: 0.85, choices: [] },
+			(key, text) => {
+				result = { key, text };
+			},
+		);
+
 		return { p, result: () => result };
 	};
+
 	const type = (p: PermissionPrompt, text: string) => {
 		for (const ch of text) p.handleInput(ch);
 	};
@@ -364,6 +449,7 @@ describe("PermissionPrompt: tell pi what to do", () => {
 		const { p } = open();
 		p.handleInput("t");
 		type(p, "x".repeat(200));
+
 		for (const row of p.render(60)) assert.equal(visibleWidth(row), 60);
 	});
 
