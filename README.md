@@ -91,8 +91,10 @@ Requires Node.js 22.18 or later.
 
 ```sh
 npm install
-npm run check   # typecheck + tests
-pi -e ./        # try a local checkout without installing
+npm run check          # format, lint (incl. anti-slop), typecheck, tests
+npm run format         # apply formatting
+npm run lint -- --fix  # apply spacing fixes
+pi -e ./               # try a local checkout without installing
 ```
 
 ## Contributing
