@@ -193,6 +193,83 @@ describe("PermissionPrompt input", () => {
 		assert.ok(p.render(70).some((r) => r.includes("line 199")));
 	});
 
+	describe("mouse clicks on options", () => {
+		// bg must be zero-width here so rendered columns match the click areas.
+		const flat: PromptTheme = { ...theme, bg: (_c, t) => t };
+
+		const open = () => {
+			let answer: { key: string; text?: string } | undefined;
+
+			const p = new PermissionPrompt(
+				tui(30),
+				flat,
+				"t",
+				[{ text: "x" }],
+				{ maxHeightRatio: 0.85, choices: ALWAYS },
+				(key, text) => {
+					answer = { key, text };
+				},
+			);
+
+			return { p, answer: () => answer };
+		};
+
+		/** Press and click at the middle of option `key`, as rendered at `width`. */
+		const clickOption = (p: PermissionPrompt, key: string, width: number) => {
+			const rows = p.render(width);
+			const y = rows.findIndex((r) => r.includes(`[${key}]`));
+			assert.ok(y >= 0, `[${key}] is rendered`);
+			const x = visibleWidth(rows[y].slice(0, rows[y].indexOf(`[${key}]`))) + 1;
+			const at = { ...wheel(0), button: "left" as const, x, y };
+			const pressed = p.handleMouse({ ...at, type: "press" });
+			const clicked = p.handleMouse({ ...at, type: "click", clickCount: 1 });
+
+			return { pressed, clicked };
+		};
+
+		for (const width of [120, 40]) {
+			it(`selects on the first click and confirms on the second (${width} columns)`, () => {
+				const { p, answer } = open();
+				const first = clickOption(p, "a", width);
+				assert.deepEqual(first.pressed, { handled: true }, "the press is taken, so the click follows");
+				assert.equal(answer(), undefined, "one click only selects");
+				clickOption(p, "a", width);
+				assert.deepEqual(answer(), { key: "a", text: undefined });
+			});
+		}
+
+		it("never approves with a single click on the default Yes", () => {
+			const { p, answer } = open();
+			clickOption(p, "y", 120);
+			assert.equal(answer(), undefined);
+		});
+
+		it("needs two clicks again after the keyboard moves the selection", () => {
+			const { p, answer } = open();
+			clickOption(p, "n", 120);
+			p.handleInput(KEY.right);
+			p.handleInput(KEY.left); // back on No
+			clickOption(p, "n", 120);
+			assert.equal(answer(), undefined);
+		});
+
+		it("opens the input on the second click of m", () => {
+			const { p, answer } = open();
+			clickOption(p, "m", 120);
+			clickOption(p, "m", 120);
+			assert.equal(answer(), undefined);
+			assert.ok(p.render(120).some((r) => r.includes("Message:")));
+		});
+
+		it("ignores clicks outside the options and on other buttons", () => {
+			const { p } = open();
+			p.render(120);
+			assert.equal(p.handleMouse({ ...wheel(0), type: "click", button: "left", x: 5, y: 1 }), undefined);
+			const y = p.render(120).findIndex((r) => r.includes("[y]"));
+			assert.equal(p.handleMouse({ ...wheel(0), type: "click", button: "right", x: 4, y }), undefined);
+		});
+	});
+
 	it("scrolls with the mouse wheel", () => {
 		const { p } = prompt(200);
 		p.render(70);

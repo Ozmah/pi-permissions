@@ -62,6 +62,7 @@ Values: `allow`, `ask`, `deny`.
 | `t`                                       | No, and tell pi what to do instead (one line, `Esc` goes back)               |
 | `a` / `d`                                 | Always, for the rest of the session                                          |
 | `←` `→` `Tab`                             | Change selection (also `↑` `↓` when options are one per row)                 |
+| Click an option                           | Select it; click it again to confirm (fullscreen mode only)                  |
 | `↑` `↓` `PgUp` `PgDn` `Home` `End`, wheel | Scroll (only `PgUp` `PgDn` `Home` `End`, wheel when options are one per row) |
 | `Esc`                                     | No                                                                           |
 

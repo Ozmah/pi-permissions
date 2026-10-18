@@ -92,6 +92,20 @@ export interface PromptOptions {
 /** Fixed rows besides the options: top border, separator, hint, bottom border. */
 const FRAME_ROWS = 4;
 
+/** Column where row content starts, after the `│ ` border. */
+const CONTENT_COL = 2;
+
+/** Between options when they share a row. */
+const OPTION_GAP = "  ";
+
+/** An option's clickable area: row and column range [start, end). */
+interface OptionHit {
+	index: number;
+	row: number;
+	start: number;
+	end: number;
+}
+
 /** Smallest body height worth showing. */
 const MIN_BODY_ROWS = 3;
 const FALLBACK_TERMINAL_ROWS = 40;
@@ -151,6 +165,10 @@ export class PermissionPrompt implements Component, Focusable {
 	private bodyHeight = 1;
 	/** Options were rendered one per row: ↑↓ select instead of scrolling. */
 	private stacked = false;
+	/** Where each option was last drawn, in component coordinates, for mouse clicks. */
+	private hits: OptionHit[] = [];
+	/** The option a first click selected; a second click on it confirms. */
+	private armed: number | undefined;
 	private wrapCache: { width: number; rows: string[] } | undefined;
 	private readonly tui: PromptHost;
 	private readonly theme: PromptTheme;
@@ -205,6 +223,7 @@ export class PermissionPrompt implements Component, Focusable {
 
 	private closeInput(): void {
 		this.input = undefined;
+		this.armed = undefined;
 		this.tui.requestRender();
 	}
 
@@ -217,17 +236,39 @@ export class PermissionPrompt implements Component, Focusable {
 		return content + " ".repeat(Math.max(0, inner - visibleWidth(content)));
 	}
 
+	/** An option's text before styling. Labels can contain agent-provided paths, hence sanitize. */
+	private static plainLabel(c: PromptChoice): string {
+		return ` [${c.key}] ${sanitize(c.label)} `;
+	}
+
+	/** Mirrors `optionRows`: one row with OPTION_GAP between labels, or one per row. */
+	private optionHits(firstRow: number, inner: number): OptionHit[] {
+		const right = CONTENT_COL + inner; // labels past the inner width are truncated
+		let col = CONTENT_COL;
+
+		return this.choices.map((c, index) => {
+			const width = visibleWidth(PermissionPrompt.plainLabel(c));
+
+			if (this.stacked)
+				return { index, row: firstRow + index, start: CONTENT_COL, end: Math.min(right, CONTENT_COL + width) };
+			const hit = { index, row: firstRow, start: col, end: Math.min(right, col + width) };
+			col += width + OPTION_GAP.length;
+
+			return hit;
+		});
+	}
+
 	/** Option labels on one row when they fit, otherwise one per row. */
 	private optionRows(inner: number): string[] {
 		const t = this.theme;
 
 		const labels = this.choices.map((c, i) => {
-			const label = ` [${c.key}] ${sanitize(c.label)} `; // labels can contain agent-provided paths
+			const label = PermissionPrompt.plainLabel(c);
 
 			return i === this.selected ? t.bg("selectedBg", t.bold(t.fg("accent", label))) : t.fg("muted", label);
 		});
 
-		const single = labels.join("  ");
+		const single = labels.join(OPTION_GAP);
 
 		return visibleWidth(single) <= inner ? [single] : labels;
 	}
@@ -304,6 +345,8 @@ export class PermissionPrompt implements Component, Focusable {
 		const pos = overflow ? ` ${this.scroll + 1}-${this.scroll + this.bodyHeight} / ${rows.length} ` : "";
 		out.push(border(`├${"─".repeat(Math.max(0, width - 3 - pos.length))}`) + t.fg("warning", pos) + border("─┤"));
 
+		this.hits = this.input ? [] : this.optionHits(out.length, inner);
+
 		for (const option of options) out.push(this.input ? `${border("│")} ${option} ${border("│")}` : row(option));
 
 		const select = this.stacked ? "↑↓ select" : "←→ select";
@@ -331,6 +374,7 @@ export class PermissionPrompt implements Component, Focusable {
 	}
 
 	private select(delta: number): void {
+		this.armed = undefined;
 		this.selected = (this.selected + delta + this.choices.length) % this.choices.length;
 		this.tui.requestRender();
 	}
@@ -377,9 +421,31 @@ export class PermissionPrompt implements Component, Focusable {
 		}
 	}
 
+	/**
+	 * Wheel scrolls. A click selects an option; a second click on it confirms, so a
+	 * stray click never approves (Yes is selected by default). The press must be
+	 * handled too: Pi only sends the click to the component that took the press.
+	 */
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-		if (event.type !== "wheel" || !event.wheelDelta) return undefined;
-		this.scrollBy(event.wheelDelta);
+		if (event.type === "wheel") {
+			if (!event.wheelDelta) return undefined;
+			this.scrollBy(event.wheelDelta);
+
+			return { handled: true };
+		}
+
+		if (event.button !== "left" || (event.type !== "press" && event.type !== "click")) return undefined;
+		const hit = this.hits.find((h) => h.row === event.y && event.x >= h.start && event.x < h.end);
+
+		if (!hit) return undefined;
+
+		if (event.type === "click") {
+			if (this.armed === hit.index) this.choose(this.choices[hit.index].key);
+			else {
+				this.select(hit.index - this.selected);
+				this.armed = hit.index;
+			}
+		}
 
 		return { handled: true };
 	}
