@@ -215,6 +215,30 @@ describe("PermissionPrompt input", () => {
 		assert.equal(result(), "a");
 	});
 
+	it("scrolls with ↑↓ when the options fit on one row", () => {
+		const { p, result } = prompt(200);
+		const rows = p.render(120);
+		assert.ok(rows.some((r) => r.includes("←→ select")));
+		p.handleInput(KEY.down);
+		assert.ok(p.render(120)[1].includes("line 1"));
+		p.handleInput(KEY.enter);
+		assert.equal(result(), "y");
+	});
+
+	it("selects with ↑↓ when the options are stacked", () => {
+		const { p, result } = prompt(200);
+		const rows = p.render(40);
+		assert.ok(rows.some((r) => r.includes("↑↓ select")));
+		p.handleInput(KEY.down); // No
+		p.handleInput(KEY.down); // No, tell pi
+		p.handleInput(KEY.down); // Always
+		assert.ok(p.render(40)[1].includes("line 0"), "the body did not scroll");
+		p.handleInput(KEY.up); // No, tell pi
+		p.handleInput(KEY.up); // No
+		p.handleInput(KEY.enter);
+		assert.equal(result(), "n");
+	});
+
 	it("answers directly with y / n / a", () => {
 		for (const [key, choice] of [
 			["y", "y"],

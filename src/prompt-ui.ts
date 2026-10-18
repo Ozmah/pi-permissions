@@ -124,6 +124,8 @@ export class PermissionPrompt implements Component, Focusable {
 	private scroll = 0;
 	private selected = 0; // "Yes"
 	private bodyHeight = 1;
+	/** Options were rendered one per row: ↑↓ select instead of scrolling. */
+	private stacked = false;
 	private wrapCache: { width: number; rows: string[] } | undefined;
 	private readonly tui: PromptHost;
 	private readonly theme: PromptTheme;
@@ -252,6 +254,8 @@ export class PermissionPrompt implements Component, Focusable {
 		const rows = this.wrapped(inner);
 
 		const options = this.input ? [this.inputRow(this.input, inner)] : this.optionRows(inner);
+
+		if (!this.input) this.stacked = options.length > 1;
 		const chrome = FRAME_ROWS + options.length;
 		const termRows = this.tui.terminal?.rows ?? FALLBACK_TERMINAL_ROWS;
 		const maxRows = Math.max(chrome + MIN_BODY_ROWS, Math.floor(termRows * this.maxHeightRatio));
@@ -274,11 +278,12 @@ export class PermissionPrompt implements Component, Focusable {
 
 		for (const option of options) out.push(this.input ? `${border("│")} ${option} ${border("│")}` : row(option));
 
+		const select = this.stacked ? "↑↓ select" : "←→ select";
+		const scroll = this.stacked ? "PgUp PgDn scroll" : "↑↓ PgUp PgDn scroll";
+
 		const hint = this.input
 			? "Enter send · Esc back to options"
-			: overflow
-				? "↑↓ PgUp PgDn scroll · ←→ select · Enter confirm · Esc deny"
-				: "←→ select · Enter confirm · Esc deny";
+			: `${overflow ? `${scroll} · ` : ""}${select} · Enter confirm · Esc deny`;
 
 		out.push(row(t.fg("dim", hint)));
 
@@ -321,9 +326,13 @@ export class PermissionPrompt implements Component, Focusable {
 
 		const page = Math.max(1, this.bodyHeight - 1);
 
-		if (matchesKey(data, Key.up)) this.scrollBy(-1);
-		else if (matchesKey(data, Key.down)) this.scrollBy(1);
-		else if (matchesKey(data, Key.pageUp)) this.scrollBy(-page);
+		if (matchesKey(data, Key.up)) {
+			if (this.stacked) this.select(-1);
+			else this.scrollBy(-1);
+		} else if (matchesKey(data, Key.down)) {
+			if (this.stacked) this.select(1);
+			else this.scrollBy(1);
+		} else if (matchesKey(data, Key.pageUp)) this.scrollBy(-page);
 		else if (matchesKey(data, Key.pageDown)) this.scrollBy(page);
 		else if (matchesKey(data, Key.home)) this.scrollBy(-this.scroll);
 		else if (matchesKey(data, Key.end)) this.scrollBy(Number.POSITIVE_INFINITY);
