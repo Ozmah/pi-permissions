@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
+- Development: oxlint with vendored anti-slop rules, oxfmt formatting, and CI on GitHub Actions.
 - Tool calls whose input is not JSON are blocked, since they cannot be inspected.
 - `t`: "No, tell pi what to do". Denies and sends one line of instructions to the agent, typed inside the prompt while the command stays visible.
 - Syntax highlighting with Pi's highlighter and theme: bash commands, `write` content, both sides of `edit` diffs. Diff signs keep their red/green.
