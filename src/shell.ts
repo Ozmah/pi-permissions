@@ -174,6 +174,16 @@ export function parseShell(command: string): ShellAnalysis {
 		}
 
 		// Unquoted
+		// A `#` starting a word comments out the rest of the line, as in bash: quotes, `<<` and operators
+		// in it do nothing. Scanning them would open a fake quote or here-document that hides the next lines.
+		if (ch === "#" && (prev === undefined || /[\s;&|()<>]/.test(prev))) {
+			const nl = command.indexOf("\n", i);
+			const end = nl < 0 ? command.length : nl;
+			cur += command.slice(i, end);
+			i = end - 1;
+			continue;
+		}
+
 		if (ch === "'" || ch === '"') {
 			quote = ch;
 			cur += ch;

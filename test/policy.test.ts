@@ -167,6 +167,17 @@ describe("decide: the safety net for strict rules mentioned anywhere", () => {
 	});
 });
 
+describe("decide: comments hide nothing", () => {
+	it("asks for a command after a comment that holds << or a quote", () => {
+		assert.equal(action("bash", { command: "git status # <<EOF\nrm -rf ~\nEOF" }), "ask");
+		assert.equal(action("bash", { command: "git status # it's fine\nrm -rf ~\necho 'x'" }), "ask");
+	});
+
+	it("still allows an allowed command with a plain comment", () => {
+		assert.equal(action("bash", { command: "git status # show the tree" }), "allow");
+	});
+});
+
 describe("decide: protected paths", () => {
 	const allowAll = mergeConfigs({
 		commands: { "*": "yes-i-am-very-sure" },

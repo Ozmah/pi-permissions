@@ -82,7 +82,7 @@ A `halt`, `deny` or `ask` command can show up somewhere other than the start of 
 
 ### Bash
 
-Commands are split on `&&`, `||`, `|`, `;`, `&` and newlines, outside quotes, and every segment is checked. Command substitution, process substitution, redirection to a file and unclosed quotes always ask. A here-document body (`<<EOF`, `<<'EOF'`, `<<-EOF`) belongs to the command that opens it, and the prompt shows it as a block under that command. A substitution inside an unquoted here-document asks, and so does a missing delimiter.
+Commands are split on `&&`, `||`, `|`, `;`, `&` and newlines, outside quotes, and every segment is checked. A `#` that starts a word comments out the rest of the line, as in bash: quotes, `<<` and operators in it do nothing. Command substitution, process substitution, redirection to a file and unclosed quotes always ask. A here-document body (`<<EOF`, `<<'EOF'`, `<<-EOF`) belongs to the command that opens it, and the prompt shows it as a block under that command. A substitution inside an unquoted here-document asks, and so does a missing delimiter.
 
 Inline scripts (`python3 - <<'EOF'`, `python3 -c`, `node -e`, `bash -c`, `ruby -e`, `perl -e`, `php -r`) get a label and highlighting in their language. They are arbitrary code, so they always go through the command rules; the extension shows them and makes no attempt to interpret them.
 

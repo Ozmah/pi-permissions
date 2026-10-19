@@ -4,6 +4,7 @@
 
 The config format changed and the old one is ignored. Rules now list what must not happen (`halt`, `deny`, `ask`), anything without a rule asks, and "stfu pi" grants silence the prompts for a folder you trust. Read the Configuration section of the README before upgrading.
 
+- A comment hides nothing. A `#` that starts a word comments out the rest of the line, as in bash, so a quote or `<<` in it no longer opens a fake quote or here-document that swallowed the next lines into an allowed command (`git status # it's` followed by `rm -rf ~`). The quote case also affected 0.3.0.
 - An abbreviated long flag counts as the flag it abbreviates (`sort --o=file`, `grep --dereference`, `tail --fol`): GNU tools accept any unambiguous prefix, so these wrote or followed symlinks as read-only commands.
 - A wildcard component that starts with a dot (`.*`, `.?`, `.[.]`) is not read-only: bash before 5.2, or with `globskipdots` off, expands it to `..` and could read outside the project.
 - `ui.describe_commands` (default `false`): the bash tool gets an optional `description` argument where the agent says what the command does, shown in the prompt as `Agent says: …`. The description never reaches the shell and plays no part in the decision. It replaces Pi's `bash` registration, so another extension that does the same conflicts with it; it is read from the global config and needs `/reload`.

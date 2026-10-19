@@ -147,3 +147,26 @@ describe("parseShell: here-documents", () => {
 		assert.deepEqual(risky("cat << ;"), ["unsupported here-document"]);
 	});
 });
+
+describe("parseShell: comments", () => {
+	it("does not open a here-document inside a comment, so the next line stays a segment", () => {
+		const cmd = "git status # <<EOF\nrm -rf ~\nEOF";
+		assert.deepEqual(texts(cmd), ["git status # <<EOF", "rm -rf ~", "EOF"]);
+		assert.equal(parseShell(cmd).segments[0].heredocs, undefined);
+	});
+
+	it("does not open a quote inside a comment, so lines are not merged", () => {
+		const cmd = "git status # it's fine\nrm -rf ~\necho 'x'";
+		assert.deepEqual(texts(cmd), ["git status # it's fine", "rm -rf ~", "echo 'x'"]);
+		assert.deepEqual(risky(cmd), []);
+	});
+
+	it("does not split on operators inside a comment", () => {
+		assert.deepEqual(texts("ls # a && b | c\npwd"), ["ls # a && b | c", "pwd"]);
+	});
+
+	it("only takes a # that starts a word", () => {
+		assert.deepEqual(texts("echo a#b && echo $# && echo ${#x}"), ["echo a#b", "echo $#", "echo ${#x}"]);
+		assert.deepEqual(texts("ls;# c && rm x\npwd"), ["ls", "# c && rm x", "pwd"]);
+	});
+});
