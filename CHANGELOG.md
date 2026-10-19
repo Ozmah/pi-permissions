@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Here-documents: the body is data for its command, no longer split into segments. Shown as a block under the command. Substitutions in an unquoted body and a missing delimiter ask. A here-document or here-string feeding a read-only command is allowed.
+- Reasons are grouped: what needs a decision first, what is already allowed folded into one line. The same cause is reported once. A blocked call tells the agent only what was refused.
+- Read-only reasons show both paths when a read goes through a symlink.
 - `readonly_commands`: bash segments that only read (`cat`, `grep`, `head`, `rg`, `find`, `cd`...) take this action when every path they read is inside the project or allowed by `external_directory`. Off unless set; explicit `bash` rules still win. Operands, `--flag=value` values and `< file` are checked as paths; `cd` is followed; flags that write or run programs disqualify the segment.
 - A bash command made only of read-only segments may mention the permission files and the extension's own files without asking: the protection is against writes.
 - `m`: "Yes, with a message". Approves the call and appends one line from the user to its result, so the agent reads it with the output. An empty message is a plain Yes.

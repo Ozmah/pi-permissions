@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { mergeConfigs } from "../src/config.ts";
-import { decide, formatReason, resolvePath } from "../src/policy.ts";
+import { decide, formatReason, needsDecision, resolvePath } from "../src/policy.ts";
 import { analyzeReadonly, cdEffect } from "../src/readonly.ts";
 import { type Token, tokenize } from "../src/shell.ts";
 
@@ -91,7 +91,8 @@ describe("analyzeReadonly", () => {
 		assert.deepEqual(analyze("cat x 2>&1"), { ok: true, paths: [{ value: "x", tilde: false }] });
 		assert.equal(analyze("cat x > out")?.ok, false);
 		assert.equal(analyze("cat x >&out")?.ok, false);
-		assert.equal(analyze("cat <<EOF")?.ok, false);
+		assert.equal(analyze("cat <> f")?.ok, false);
+		assert.equal(analyze("cat <<'EOF'")?.ok, true, "a here-document is stdin data");
 	});
 
 	it("reduces a glob to its fixed directory", () => {
@@ -235,6 +236,30 @@ describe("decide: read-only commands", () => {
 			reason,
 			`${dir}/target (symlink from ${dir}/link) → no matching external_directory rule (fallback "*": ask)`,
 		);
+	});
+
+	it("reduces an agent's cd + script + grep command to the one decision that matters", () => {
+		const command = [
+			`cd ${cwd} && python3 - <<'EOF'`,
+			"p = 'src/policy.ts'",
+			"def r(a, b):",
+			"    global s",
+			"open(p, 'w').write(s)",
+			"EOF",
+			'grep -n "describe" -A25 test/policy.test.ts | head -30',
+		].join("\n");
+
+		const d = bash(command);
+		assert.equal(d.action, "ask");
+		assert.deepEqual(d.reasons.filter(needsDecision).map(formatReason), [
+			`"python3 - <<'EOF'" → no matching bash rule (fallback "*": ask)`,
+		]);
+		assert.equal(d.reasons.filter((r) => !needsDecision(r)).length, 3, "cd, grep and head are allowed");
+	});
+
+	it("reports the same cause once, not per segment", () => {
+		const skipped = bash("eval x && cat a && cat b").reasons.filter((r) => r.kind === "skipped");
+		assert.equal(skipped.length, 1);
 	});
 
 	describe("protected paths", () => {

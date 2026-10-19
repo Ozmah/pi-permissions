@@ -23,7 +23,7 @@ import {
 	readConfigFile,
 } from "./config.ts";
 import { type MarkdownTheme, highlightMarkdown } from "./markdown.ts";
-import { decide, formatReason, resolvePath } from "./policy.ts";
+import { decide, formatReason, needsDecision, resolvePath } from "./policy.ts";
 import { type CallTarget, type Grant, type GrantChoice, describeGrant, grantChoices, grantMatches } from "./grants.ts";
 import { BASE_CHOICES, type BodyLine, MESSAGE, NO, PermissionPrompt, TELL, inputSpec } from "./prompt-ui.ts";
 import { readState, setDisabled, writeState } from "./state.ts";
@@ -199,7 +199,8 @@ export default function (pi: ExtensionAPI) {
 
 		if (d.action === "allow") return undefined;
 
-		const why = d.reasons.map(formatReason).join("\n");
+		// Only what was not allowed: the agent needs to know which part was refused, not what passed.
+		const why = d.reasons.filter(needsDecision).map(formatReason).join("\n");
 
 		if (d.action === "deny") {
 			if (ctx.hasUI) ctx.ui.notify(sanitize(`⛔ Blocked: ${event.toolName}\n${why}`), "warning");

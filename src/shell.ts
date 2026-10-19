@@ -10,11 +10,61 @@
 /** Operator that precedes a segment. `"\n"` is a plain newline separator. */
 export type Operator = "&&" | "||" | "|" | ";" | "&" | "\n";
 
+/** A here-document: the lines after the command, up to `delimiter`, fed to its stdin. */
+export interface Heredoc {
+	delimiter: string;
+	body: string;
+}
+
 export interface Segment {
-	/** Segment text, trimmed, original spacing preserved. */
+	/** Segment text, trimmed, original spacing preserved. Here-document bodies are not part of it. */
 	text: string;
 	/** Operator before this segment (undefined for the first one). */
 	op?: Operator;
+	/** Here-documents opened by this segment, in order. */
+	heredocs?: Heredoc[];
+}
+
+/** A `<<` seen on the current line, waiting for its body after the newline. */
+interface PendingHeredoc {
+	delimiter: string;
+	/** Any part of the delimiter was quoted: the body is literal, no expansion. */
+	quoted: boolean;
+	/** `<<-`: leading tabs are stripped, also from the delimiter line. */
+	stripTabs: boolean;
+	/** Index of the segment it belongs to. */
+	owner: number;
+}
+
+/** Reads the delimiter after `<<` at `start`. Undefined when there is none. */
+function readDelimiter(command: string, start: number): Omit<PendingHeredoc, "owner"> | undefined {
+	let i = start;
+	const stripTabs = command[i] === "-";
+
+	if (stripTabs) i++;
+
+	while (command[i] === " " || command[i] === "\t") i++;
+	let delimiter = "";
+	let quoted = false;
+
+	for (; i < command.length && !/[\s;|&<>()]/.test(command[i]); i++) {
+		const ch = command[i];
+
+		if (ch === "'" || ch === '"') {
+			const close = command.indexOf(ch, i + 1);
+
+			if (close < 0) return undefined;
+			delimiter += command.slice(i + 1, close);
+			quoted = true;
+			i = close;
+		} else if (ch === "\\" && i + 1 < command.length) {
+			delimiter += command[i + 1];
+			quoted = true;
+			i++;
+		} else delimiter += ch;
+	}
+
+	return delimiter ? { delimiter, quoted, stripTabs } : undefined;
 }
 
 export interface ShellAnalysis {
@@ -49,6 +99,7 @@ export function parseShell(command: string): ShellAnalysis {
 	let cur = "";
 	let op: Operator | undefined;
 	let quote: "'" | '"' | null = null;
+	let pending: PendingHeredoc[] = [];
 
 	const push = (nextOp: Operator) => {
 		const text = cur.trim();
@@ -56,6 +107,44 @@ export function parseShell(command: string): ShellAnalysis {
 		if (text) segments.push(op ? { text, op } : { text });
 		cur = "";
 		op = nextOp;
+	};
+
+	/**
+	 * Consumes the bodies of the pending here-documents, starting at `pos` (the
+	 * line after the command). Returns the index of the first character after them.
+	 */
+	const readBodies = (pos: number): number => {
+		for (const h of pending) {
+			const lines: string[] = [];
+			let closed = false;
+
+			while (pos < command.length) {
+				const nl = command.indexOf("\n", pos);
+				const line = command.slice(pos, nl < 0 ? command.length : nl);
+				pos = nl < 0 ? command.length : nl + 1;
+
+				if ((h.stripTabs ? line.replace(/^\t+/, "") : line) === h.delimiter) {
+					closed = true;
+					break;
+				}
+
+				lines.push(line);
+			}
+
+			// Without its delimiter, bash takes everything left as the body: nothing after it can be trusted.
+			if (!closed) risky.add("unclosed here-document");
+			const body = lines.join("\n");
+
+			// An unquoted delimiter means the body is expanded: substitutions in it run.
+			if (!h.quoted && /`|\$\(/.test(body)) risky.add("command substitution");
+			const owner = segments[h.owner];
+
+			if (owner) (owner.heredocs ??= []).push({ delimiter: h.delimiter, body });
+		}
+
+		pending = [];
+
+		return pos;
 	};
 
 	for (let i = 0; i < command.length; i++) {
@@ -95,6 +184,13 @@ export function parseShell(command: string): ShellAnalysis {
 
 		if ((ch === "<" || ch === ">") && next === "(") risky.add("process substitution");
 
+		if (ch === "<" && next === "<" && command[i + 2] !== "<" && prev !== "<") {
+			const h = readDelimiter(command, i + 2);
+
+			if (h) pending.push({ ...h, owner: segments.length });
+			else risky.add("unsupported here-document");
+		}
+
 		if (ch === ">" && next !== "(" && isFileRedirect(command, i)) risky.add("redirection to file");
 
 		if (ch === "&" && next === "&") {
@@ -111,6 +207,8 @@ export function parseShell(command: string): ShellAnalysis {
 			push(";");
 		} else if (ch === "\n") {
 			push("\n");
+
+			if (pending.length) i = readBodies(i + 1) - 1;
 		} else if (ch === "&" && prev !== ">" && prev !== "<" && next !== ">") {
 			push("&"); // background operator
 		} else {
@@ -120,6 +218,8 @@ export function parseShell(command: string): ShellAnalysis {
 
 	if (quote) risky.add("unclosed quote");
 	push("\n");
+
+	if (pending.length) readBodies(command.length);
 
 	return { segments, risky: [...risky] };
 }
@@ -146,7 +246,7 @@ export interface Redirect {
 
 export type Token = Word | Redirect;
 
-const REDIRECT_OPS = ["<<<", "<<", "<&", "<>", "<", ">>", ">|", ">&", ">"];
+const REDIRECT_OPS = ["<<<", "<<-", "<<", "<&", "<>", "<", ">>", ">|", ">&", ">"];
 
 /**
  * Splits one segment (from `parseShell`) into words and redirections. Returns

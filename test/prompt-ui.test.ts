@@ -360,6 +360,23 @@ describe("buildBody", () => {
 		assert.deepEqual(body, ["Command", "a", "&& b", "| c", "", "Why", formatReason(reason)]);
 	});
 
+	it("shows a here-document body as a block under its command", () => {
+		const body = buildBody("bash", { command: "python3 - <<'PY'\nprint(1)\nPY\nls" }, undefined, []);
+		const block = body.map((l) => `${l.prefix ?? ""}${l.text}`);
+		assert.deepEqual(block.slice(0, 5), ["Command", "$ python3 - <<'PY'", "  \u2502 print(1)", "  PY", "  ls"]);
+	});
+
+	it("lists what needs a decision, then folds what is allowed into one line", () => {
+		const reasons: Reason[] = [
+			{ kind: "readonly", subject: '"cd x"', action: "allow" },
+			{ kind: "fallback", subject: '"python3 -"', section: "bash", action: "ask" },
+			{ kind: "readonly", subject: '"grep a b"', action: "allow" },
+		];
+
+		const why = texts(buildBody("bash", { command: "x" }, undefined, reasons)).slice(-2);
+		assert.deepEqual(why, [formatReason(reasons[1]), `2 allowed: "cd x", "grep a b"`]);
+	});
+
 	it("shows an edit as a diff", () => {
 		const body = buildBody("edit", { path: "x", edits: [{ oldText: "a", newText: "b" }] }, "/p/x", []);
 		const diff = body.filter((l) => l.prefix === "- " || l.prefix === "+ ").map((l) => `${l.prefix}${l.text}`);

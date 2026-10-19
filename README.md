@@ -49,7 +49,9 @@ Values: `allow`, `ask`, `deny`.
 
 **Precedence.** The most specific pattern wins; on a tie, the strictest action. File tools take the strictest of their `tools` and `external_directory` rules.
 
-**Bash.** Commands are split on `&&`, `||`, `|`, `;`, `&` and newlines, outside quotes, and every segment is checked. Command substitution, process substitution, redirection to a file and unclosed quotes always ask.
+**Bash.** Commands are split on `&&`, `||`, `|`, `;`, `&` and newlines, outside quotes, and every segment is checked. Command substitution, process substitution, redirection to a file and unclosed quotes always ask. Here-document bodies (`<<EOF`, `<<'EOF'`, `<<-EOF`) are data for their command, not segments: the prompt shows them as a block under it. A substitution in an unquoted here-document asks, and so does a missing delimiter.
+
+The prompt lists first what needs a decision, then folds what is already allowed into one line.
 
 **Read-only commands.** With `"readonly_commands": "allow"`, a segment that only reads gets that action when every path it reads is inside the project or allowed by `external_directory`, so `cd apps/server && grep -n foo src/*.ts | head -20` runs without asking. Explicit `bash` rules still win; it only replaces the `"*"` fallback or the default, and never makes them stricter.
 

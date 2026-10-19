@@ -126,7 +126,10 @@ function pathOf(w: Word): PathCheck {
 function redirectCheck(op: string, target: Word | undefined): PathCheck | { harmless: true } {
 	if (!target) return { why: "a redirection has no target" };
 
-	if (op.endsWith("<<") || op.endsWith("<<<") || op.endsWith("<>")) return { why: `unsupported redirection ${op}` };
+	// Here-documents and here-strings are stdin data; substitutions in them are flagged by parseShell.
+	if (op.endsWith("<<") || op.endsWith("<<-") || op.endsWith("<<<")) return { harmless: true };
+
+	if (op.endsWith("<>")) return { why: `unsupported redirection ${op}` };
 	const fdDup = op.endsWith("&") && !op.startsWith("&");
 	const writes = { why: "writes a file" };
 

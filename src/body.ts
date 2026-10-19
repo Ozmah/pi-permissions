@@ -2,7 +2,7 @@
  * Builds the prompt body for a tool call. The body is unbounded; the prompt scrolls it.
  */
 import { type Json, type JsonObject, isJsonObject, isNumber, isString } from "./config.ts";
-import { formatReason, type Reason } from "./policy.ts";
+import { formatReason, needsDecision, type Reason } from "./policy.ts";
 import { ACTION_COLOR, type BodyLine, type Span } from "./prompt-ui.ts";
 import { displayLines, parseShell } from "./shell.ts";
 import { onlySgr, sanitize } from "./text.ts";
@@ -50,8 +50,11 @@ function highlightLines(raw: string, lang: string | undefined, deps: BodyDeps): 
 function bashBody(input: JsonObject, deps: BodyDeps): BodyLine[] {
 	const lines: BodyLine[] = [heading("Command")];
 	let first = true;
+	const analysis = parseShell(isString(input.command) ? input.command : "");
+	const texts = displayLines(analysis);
 
-	for (const text of displayLines(parseShell(isString(input.command) ? input.command : ""))) {
+	analysis.segments.forEach((segment, i) => {
+		const text = texts[i];
 		const highlighted = highlightLines(text, "bash", deps);
 
 		for (const piece of highlighted ?? [text]) {
@@ -64,7 +67,16 @@ function bashBody(input: JsonObject, deps: BodyDeps): BodyLine[] {
 			});
 			first = false;
 		}
-	}
+
+		// Here-document bodies: data for the command, shown as a block under it.
+		for (const h of segment.heredocs ?? []) {
+			for (const line of h.body.split("\n")) {
+				lines.push({ text: line, prefix: "  │ ", prefixColor: "dim", contPrefix: "  │   " });
+			}
+
+			lines.push({ text: h.delimiter, color: "dim", prefix: "  " });
+		}
+	});
 
 	if (isNumber(input.timeout)) lines.push({ text: `timeout: ${input.timeout}s`, color: "dim" });
 
@@ -207,8 +219,17 @@ export function buildBody(
 
 	body.push(BLANK, heading("Why"));
 
-	for (const r of reasons)
+	// What needs a decision first; what is already allowed folded into one line.
+	for (const r of reasons.filter(needsDecision)) {
 		body.push({ text: formatReason(r), spans: reasonSpans(r), prefix: "• ", prefixColor: "dim" });
+	}
+
+	const allowed = reasons.filter((r) => !needsDecision(r));
+
+	if (allowed.length) {
+		const text = `${allowed.length} allowed: ${allowed.map((r) => r.subject).join(", ")}`;
+		body.push({ text, color: "dim", prefix: "✓ ", prefixColor: "success" });
+	}
 
 	return body;
 }

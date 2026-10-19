@@ -36,6 +36,11 @@ export function formatReason(r: Reason): string {
 	}
 }
 
+/** Reasons the user has to weigh: anything not plainly allowed. Allowed ones are context. */
+export function needsDecision(r: Reason): boolean {
+	return r.kind === "skipped" || r.action !== "allow";
+}
+
 export interface Decision {
 	action: Action;
 	/** The rules that produced the decision. */
@@ -327,7 +332,11 @@ function decideBash(cfg: PermissionConfig, command: string, opts: DecideOptions)
 		const ro = readonly && looser && !explicit && tokens ? decideReadonly(cfg, readonly, tokens, wd, opts) : undefined;
 
 		if (ro && "why" in ro) {
-			segReasons.push({ kind: "skipped", subject, why: ro.why });
+			// The same cause (e.g. an unknown working directory) is reported once, not per segment.
+			if (!reasons.some((r) => r.kind === "skipped" && r.why === ro.why)) {
+				segReasons.push({ kind: "skipped", subject, why: ro.why });
+			}
+
 			onlyReads = false;
 		} else if (ro && readonly && RANK[ro.action] <= RANK[ruleAction]) {
 			segAction = ro.action;
