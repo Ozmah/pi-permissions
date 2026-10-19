@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { before, beforeEach, describe, it } from "node:test";
 import type { Component } from "@earendil-works/pi-tui";
 import type { JsonObject } from "../src/config.ts";
+import { shortPath } from "../src/grants.ts";
 import type { PromptHost, PromptTheme } from "../src/prompt-ui.ts";
 import type { Summary } from "../src/summary.ts";
 
@@ -405,6 +406,51 @@ describe("always grants", () => {
 		assert.ok(status.get("permissions-stfu")?.endsWith(`stfu pi on ${clipboard.replace(home, "~")}/**`));
 		await run("reset");
 		assert.equal(status.get("permissions-stfu"), undefined);
+	});
+
+	describe("/permissions stfu removes one grant", () => {
+		const grantBoth = async () => {
+			await read(shot("paste-1.png"), ctx({ key: "d" }));
+			await call("edit", { path: path.join(project, "a.ts"), edits: [] }, ctx({ key: "a" }));
+		};
+
+		const grants = async () => {
+			await run("");
+
+			return lastCard().data.grants;
+		};
+
+		it("picks it from a list", async () => {
+			await grantBoth();
+			await run("stfu", ctx({ selectIndex: 0 }));
+			assert.deepEqual(await grants(), [`stfu pi on ${project.replace(home, "~")}/`]);
+			assert.ok(status.get("permissions-stfu")?.endsWith(`stfu pi on ${project.replace(home, "~")}/`));
+			assert.ok(blocked(await read(shot("paste-2.png"), ctx({ key: "n" }))), "the removed grant no longer covers");
+		});
+
+		it("takes the folder as an argument, in ~ form too", async () => {
+			await grantBoth();
+			await run(`stfu ${project.replace(home, "~")}`);
+			assert.deepEqual(await grants(), [`stfu pi on ${clipboard.replace(home, "~")}/ and subfolders`]);
+		});
+
+		it("completes the folders that have a grant", async () => {
+			await grantBoth();
+
+			const values = registered(commands, "permissions")
+				.getArgumentCompletions("stfu ")
+				.map((i) => i.value);
+
+			assert.ok(values.includes(`stfu ${shortPath(project)}`));
+		});
+
+		it("says so when there is nothing to remove", async () => {
+			await run("stfu");
+			assert.equal(notes.at(-1), "No session grants");
+			await grantBoth();
+			await run("stfu ~/nowhere");
+			assert.equal(notes.at(-1), "No session grant on ~/nowhere");
+		});
 	});
 
 	it("shows grants explicitly in the /permissions card", async () => {

@@ -67,7 +67,7 @@ const approvedMessage = (text: string) => `The user approved this tool call and 
 const toldReason = (text: string) =>
 	`The user denied this action and gave instructions instead:\n${text}\nFollow these instructions instead of retrying the same action.`;
 
-const USAGE = "Usage: /permissions [reset | off [--session] | on]";
+const USAGE = "Usage: /permissions [reset | stfu [folder] | off [--session] | on]";
 
 /** Pi's highlighter for code; Markdown uses Pi's `md*` colors, with fenced blocks back to Pi's highlighter. */
 function bodyDeps(theme: MarkdownTheme): BodyDeps {
@@ -324,6 +324,40 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.notify(`pi-permissions enabled for ${dir}`, "info");
 	}
 
+	/**
+	 * Removes session grants: the ones on `folder` when given (`~` and the
+	 * shortened `…/` form are accepted), otherwise the one picked from a list.
+	 */
+	async function revoke(ctx: ExtensionContext, folder: string, cwd: string): Promise<void> {
+		if (!sessionGrants.length) {
+			ctx.ui.notify("No session grants", "info");
+
+			return;
+		}
+
+		let removed: Grant[];
+
+		if (folder) {
+			const wanted = resolvePath(folder, cwd);
+			removed = sessionGrants.filter((g) => g.kind === "access" && (g.dir === wanted || shortPath(g.dir) === folder));
+		} else {
+			const labels = sessionGrants.map((g) => sanitize(describeGrant(g)));
+			const picked = await ctx.ui.select("Remove a session grant", labels);
+			const grant = sessionGrants[labels.indexOf(picked ?? "")];
+			removed = grant ? [grant] : [];
+		}
+
+		if (!removed.length) {
+			if (folder) ctx.ui.notify(sanitize(`No session grant on ${folder}`), "warning");
+
+			return;
+		}
+
+		sessionGrants = sessionGrants.filter((g) => !removed.includes(g));
+		updateStfuStatus(ctx);
+		ctx.ui.notify(sanitize(`Removed: ${removed.map(describeGrant).join(", ")}`), "info");
+	}
+
 	function show(ctx: ExtensionContext, dir: string): void {
 		const errors: string[] = [];
 		const off = offMode(dir, errors);
@@ -349,12 +383,23 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerCommand("permissions", {
 		description: "Show permission config; reset grants; turn off/on for this project",
-		getArgumentCompletions: (prefix) =>
-			COMMANDS.filter((c) => c.args && c.args.startsWith(prefix.trim())).map((c) => ({
-				value: c.args,
-				label: c.args,
-				description: c.description,
-			})),
+		getArgumentCompletions: (prefix) => {
+			const typed = prefix.trim();
+			const options = COMMANDS.flatMap((c) => (c.args ? [{ value: c.args, description: c.description }] : []));
+
+			// `stfu <folder>`: complete with the folders that have a grant.
+			for (const g of sessionGrants) {
+				const value = g.kind === "access" ? `stfu ${shortPath(g.dir)}` : undefined;
+
+				if (value && !options.some((o) => o.value === value)) {
+					options.push({ value, description: "Remove the grants on this folder" });
+				}
+			}
+
+			return options.flatMap((o) =>
+				o.value.startsWith(typed) ? [{ value: o.value, label: o.value, description: o.description }] : [],
+			);
+		},
 		handler: async (args, ctx) => {
 			const dir = projectDir(ctx);
 			const [sub = "", ...flags] = args.trim().split(/\s+/).filter(Boolean);
@@ -365,6 +410,8 @@ export default function (pi: ExtensionAPI) {
 					sessionGrants = [];
 					updateStfuStatus(ctx);
 					ctx.ui.notify("Session grants cleared", "info");
+				} else if (sub === "stfu") {
+					await revoke(ctx, flags.join(" "), dir);
 				} else if (sub === "off" && (flags.length === 0 || (flags.length === 1 && flags[0] === "--session"))) {
 					await turnOff(ctx, dir, flags.length === 1);
 				} else if (sub === "on" && flags.length === 0) turnOn(ctx, dir);

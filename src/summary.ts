@@ -13,7 +13,8 @@ export const SUMMARY_ENTRY = "pi-permissions-summary";
 /** `/permissions` subcommands: one list for the card and for argument completion. */
 export const COMMANDS: readonly { args: string; description: string }[] = [
 	{ args: "", description: "Show this summary" },
-	{ args: "reset", description: "Clear session grants (stfu pi)" },
+	{ args: "reset", description: "Clear all session grants (stfu pi)" },
+	{ args: "stfu", description: "Remove one session grant: pick it, or name its folder" },
 	{ args: "off", description: "Disable for this project (persistent)" },
 	{ args: "off --session", description: "Disable for this project until the session ends" },
 	{ args: "on", description: "Enable for this project" },
