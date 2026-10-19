@@ -141,6 +141,39 @@ describe("analyzeReadonly", () => {
 		}
 	});
 
+	it("accepts sed -n printing line ranges, and only that", () => {
+		assert.deepEqual(analyze("sed -n 1,60p index.ts"), { ok: true, paths: [{ value: "index.ts", tilde: false }] });
+		assert.equal(analyze("sed -n '330,420p' a.ts")?.ok, true);
+		assert.equal(analyze("sed -n '$p' a.ts")?.ok, true);
+		assert.equal(analyze("sed -n 10,\\$p a.ts")?.ok, true);
+		assert.equal(analyze("sed --quiet -E -e 5p -e 10,20p a.ts")?.ok, true);
+		assert.equal(analyze("sed -n -e 5p first second")?.ok, true);
+
+		for (const text of [
+			"sed -n -i 1,5p f",
+			"sed -ni 1,5p f",
+			"sed -n --in-place 1p f",
+			"sed -n -f script.sed f",
+			"sed -n 1,5w out f",
+			"sed -n '1e rm -rf ~' f",
+			"sed -n 's/a/b/e' f",
+			"sed -n '1,5p;w out' f",
+			"sed -n '/foo/p' f",
+			"sed -n 'r /etc/shadow' f",
+			"sed 1,5p f",
+			"sed -n $p f",
+			"sed -n -e 's/x/y/w out' f",
+		]) {
+			assert.equal(analyze(text)?.ok, false, text);
+		}
+	});
+
+	it("checks every sed operand as a file once -e gives the script", () => {
+		const r = analyze("sed -n first -e 5p");
+		assert.ok(r?.ok);
+		assert.deepEqual(r.paths, [{ value: "first", tilde: false }]);
+	});
+
 	it("rejects paths attached to short flags", () => {
 		assert.equal(analyze("grep -f/etc/patterns x")?.ok, false);
 		assert.equal(analyze("grep -A3 x")?.ok, true);
@@ -214,6 +247,12 @@ describe("decide: read-only commands", () => {
 		}
 
 		assert.equal(action("cd etc && cat passwd", "/"), "ask", "CDPATH");
+	});
+
+	it("allows the sed -n | grep | head reads agents send inside the project", () => {
+		const command = `cd ${cwd}/src && sed -n 1,60p index.ts | grep -v "^ \\*\\|^$" | head -40; sed -n 330,420p index.ts`;
+		assert.equal(action(command), "allow");
+		assert.equal(action("sed -n 1,5p /etc/passwd"), "ask", "outside the project");
 	});
 
 	it("asks for read-only commands used to write or run programs", () => {

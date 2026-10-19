@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `sed -n` printing line ranges (`sed -n 1,60p index.ts`) is a read-only command. Only that exact shape counts: `-i`, `-f` and any other script ask.
 - A `$` that expands nothing (`grep "^$"`, `a$ b`) is a literal `$`, no longer taken for a variable. Such commands were not recognized as read-only.
 - "stfu pi" is never offered for your home or the root folder. A `cd` that widened the command's folder to `~` used to offer it.
 - A read-only command that asks says why: "reads outside the project" or "a path rule applies". Operands that are no file (a `grep` pattern) are marked "no such file, checked as a path".

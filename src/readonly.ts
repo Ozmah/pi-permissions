@@ -159,6 +159,8 @@ export function analyzeReadonly(tokens: Token[]): ReadonlyResult | undefined {
 	const [head, ...rest] = tokens;
 
 	if (!isWord(head) || head.dynamic || head.glob) return undefined;
+
+	if (head.value === "sed") return analyzeSed(rest);
 	const spec = COMMANDS.get(head.value);
 
 	if (!spec) return undefined;
@@ -219,6 +221,87 @@ export function analyzeReadonly(tokens: Token[]): ReadonlyResult | undefined {
 	}
 
 	return { ok: true, paths: spec.noPaths ? inputs : [...operands, ...inputs] };
+}
+
+/** A sed script that only prints a line range: `5p`, `1,60p`, `$p`, `10,$p`. */
+const SED_PRINT_RANGE = /^(\d+|\$)(,(\d+|\$))?p$/;
+
+/** sed options that change neither what is read nor what is written. `-n` is required separately. */
+const SED_HARMLESS = new Set(["-E", "-r", "-s", "-z", "-u", "--regexp-extended", "--separate", "--null-data"]);
+
+const SED_QUIET = new Set(["-n", "--quiet", "--silent"]);
+
+/**
+ * `sed -n` printing line ranges, and nothing else. The script must be exactly a
+ * range and `p`: `w` writes, `e` runs commands, `r` reads other files, and `-i`
+ * rewrites the file, so anything else asks. No sed language is parsed: the
+ * script either matches the fixed shape or the command is not read-only.
+ */
+function analyzeSed(rest: Token[]): ReadonlyResult {
+	const operands: PathArg[] = [];
+	const inputs: PathArg[] = [];
+	let quiet = false;
+	let script: Word | undefined;
+	let afterDashes = false;
+	const notReadonly = (why: string): ReadonlyResult => ({ ok: false, why });
+	// With any -e, every operand is a file, even one written before it.
+	const hasExpression = rest.some((t) => isWord(t) && (t.value === "-e" || t.value.startsWith("--expression=")));
+
+	for (let i = 0; i < rest.length; i++) {
+		const t = rest[i];
+
+		if (t.kind === "redirect") {
+			const target = rest[i + 1];
+			const r = redirectCheck(t.op, isWord(target) ? target : undefined);
+			i++;
+
+			if ("why" in r) return notReadonly(r.why);
+
+			if ("path" in r) inputs.push(r.path);
+			continue;
+		}
+
+		if (t.dynamic) return notReadonly(`"${t.value}" depends on a variable or substitution`);
+
+		if (!afterDashes && t.value === "--") {
+			afterDashes = true;
+			continue;
+		}
+
+		if (!afterDashes && t.value.startsWith("-") && t.value !== "-") {
+			if (SED_QUIET.has(t.value)) quiet = true;
+			else if (t.value === "-e" || t.value.startsWith("--expression=")) {
+				const value = t.value === "-e" ? rest[++i] : { ...t, value: t.value.slice("--expression=".length) };
+
+				if (!isWord(value) || value.dynamic || !SED_PRINT_RANGE.test(value.value)) {
+					return notReadonly("the sed script does more than print a line range");
+				}
+
+				script = value;
+			} else if (!SED_HARMLESS.has(t.value)) return notReadonly(`sed ${t.value} is not read-only`);
+			continue;
+		}
+
+		if (t.value === "-") continue; // stdin
+
+		// The first operand is the script, unless -e gives one.
+		if (!hasExpression && !script) {
+			if (!SED_PRINT_RANGE.test(t.value)) return notReadonly("the sed script does more than print a line range");
+			script = t;
+			continue;
+		}
+
+		const p = pathOf(t);
+
+		if ("why" in p) return notReadonly(p.why);
+		operands.push(p.path);
+	}
+
+	if (!quiet) return notReadonly("sed without -n");
+
+	if (!script) return notReadonly("sed without a script");
+
+	return { ok: true, paths: [...operands, ...inputs] };
 }
 
 /**
