@@ -4,6 +4,7 @@
 
 The config format changed and the old one is ignored. Rules now list what must not happen (`halt`, `deny`, `ask`), anything without a rule asks, and "stfu pi" grants silence the prompts for a folder you trust. Read the Configuration section of the README before upgrading.
 
+- A wildcard component that starts with a dot (`.*`, `.?`, `.[.]`) is not read-only: bash before 5.2, or with `globskipdots` off, expands it to `..` and could read outside the project.
 - `ui.describe_commands` (default `false`): the bash tool gets an optional `description` argument where the agent says what the command does, shown in the prompt as `Agent says: …`. The description never reaches the shell and plays no part in the decision. It replaces Pi's `bash` registration, so another extension that does the same conflicts with it; it is read from the global config and needs `/reload`.
 - `/permissions stfu` removes one session grant, picked from a list or named by its folder (`/permissions stfu ~/dev/app`, with completion). `/permissions reset` still clears them all.
 - When an active "stfu pi" grant touches a call but does not cover it, the prompt says why: a subfolder of a folder-only grant, a `cd` that leaves the folder, or a call that always asks.

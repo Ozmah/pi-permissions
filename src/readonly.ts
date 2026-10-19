@@ -114,6 +114,14 @@ function pathOf(w: Word): PathCheck {
 	const first = w.value.search(/[*?[]/);
 
 	if (/(^|\/)\.\.(\/|$)/.test(w.value.slice(first))) return { why: `"${w.value}" uses .. after a wildcard` };
+
+	// A component that starts with a literal `.` and holds a wildcard (`.*`, `.?`, `.[.]`) can match `..`
+	// itself: bash before 5.2, or with globskipdots off. Only such a component can, since a leading dot
+	// is never matched by `*`, `?` or a bracket expression.
+	if (w.value.split("/").some((c) => c.startsWith(".") && /[*?[]/.test(c))) {
+		return { why: `"${w.value}" has a wildcard that can match ..` };
+	}
+
 	const slash = w.value.lastIndexOf("/", first);
 
 	return { path: { value: slash < 0 ? "." : w.value.slice(0, slash) || "/", tilde: w.tilde } };

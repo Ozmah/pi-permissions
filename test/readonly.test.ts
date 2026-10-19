@@ -111,6 +111,25 @@ describe("analyzeReadonly", () => {
 		assert.equal(analyze("cat src/*/../../x")?.ok, false);
 	});
 
+	it("rejects a wildcard component that can match .. itself", () => {
+		for (const text of [
+			"cat .*/.*/etc/passwd",
+			"cat .*/secret",
+			"cat .?/x",
+			"cat .[.]/x",
+			"cat src/.*/x",
+			"grep -r x .*",
+		]) {
+			assert.equal(analyze(text)?.ok, false, text);
+		}
+	});
+
+	it("keeps dot folders without a wildcard, and wildcards without a leading dot", () => {
+		assert.deepEqual(analyze("cat .git/*.ts"), { ok: true, paths: [{ value: ".git", tilde: false }] });
+		assert.equal(analyze("cat src/*.ts")?.ok, true);
+		assert.equal(analyze("cat '.*'")?.ok, true, "a quoted .* is a literal name");
+	});
+
 	it("checks --flag=value values as paths, both readings of ~", () => {
 		const r = analyze("grep --exclude-from=~/x y");
 		assert.ok(r?.ok);
