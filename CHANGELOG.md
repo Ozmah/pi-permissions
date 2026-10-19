@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The status bar shows `🤫 stfu pi on <folder>/` while a folder grant is active.
+- Session grants are now **"stfu pi on <folder>/"**, total access to a folder: `a` that folder, `d` it and its subfolders, for every tool, bash included (the folder a command runs in, following its `cd`s). Replaces "Always: this exact command" and the per-tool directory and file grants. Agents today send endless one-liners chaining `cd`, pipes and inline scripts (blame Opus 5.5 and Sol 6.1): an exact command never comes back, a trusted folder does. Grants stay in memory, never cover protected files, and `deny` rules still apply.
 - Inline scripts (`python3 - <<'EOF'`, `python3 -c`, `node -e`, `bash -c`/`-s`, `ruby -e`, `perl -e`, `php -r`) are labeled in the prompt ("Python script, 12 lines") and highlighted in their language. Display only: they still go through the bash rules.
 - Here-documents: the body is data for its command, no longer split into segments. Shown as a block under the command. Substitutions in an unquoted body and a missing delimiter ask. A here-document or here-string feeding a read-only command is allowed.
 - Reasons are grouped: what needs a decision first, what is already allowed folded into one line. The same cause is reported once. A blocked call tells the agent only what was refused.

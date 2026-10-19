@@ -24,7 +24,15 @@ import {
 } from "./config.ts";
 import { type MarkdownTheme, highlightMarkdown } from "./markdown.ts";
 import { decide, formatReason, needsDecision, resolvePath } from "./policy.ts";
-import { type CallTarget, type Grant, type GrantChoice, describeGrant, grantChoices, grantMatches } from "./grants.ts";
+import {
+	type CallTarget,
+	type Grant,
+	type GrantChoice,
+	describeGrant,
+	grantChoices,
+	grantMatches,
+	shortPath,
+} from "./grants.ts";
 import { BASE_CHOICES, type BodyLine, MESSAGE, NO, PermissionPrompt, TELL, inputSpec } from "./prompt-ui.ts";
 import { readState, setDisabled, writeState } from "./state.ts";
 import { COMMANDS, SUMMARY_ENTRY, type Summary, renderSummary } from "./summary.ts";
@@ -42,6 +50,9 @@ const EXTENSION_ROOT = packageRoot();
 const FALLBACK_MAX_LINES = 40;
 
 const STATUS_KEY = "permissions";
+
+/** Separate from STATUS_KEY: "stfu" grants and "off" can show at the same time. */
+const STFU_STATUS_KEY = "permissions-stfu";
 const UNINSPECTABLE = "pi-permissions could not inspect this tool call: its input is not JSON.";
 const DENIED_REASON = "The user denied this action. Do not retry it; ask the user how to proceed.";
 
@@ -133,6 +144,18 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setStatus(STATUS_KEY, mode ? ctx.ui.theme.fg("warning", label) : undefined);
 	}
 
+	/** Folders under "stfu pi", always on screen so a grant given hours ago is not forgotten. */
+	function updateStfuStatus(ctx: ExtensionContext): void {
+		if (!ctx.hasUI) return;
+
+		const folders = sessionGrants.flatMap((g) =>
+			g.kind === "access" ? [`${shortPath(g.dir)}/${g.recursive ? "**" : ""}`] : [],
+		);
+
+		const label = `🤫 stfu pi on ${folders.join(", ")}`;
+		ctx.ui.setStatus(STFU_STATUS_KEY, folders.length ? ctx.ui.theme.fg("warning", label) : undefined);
+	}
+
 	// The /permissions card: kept in the transcript, never sent to the model.
 	pi.registerEntryRenderer<Summary>(SUMMARY_ENTRY, (entry, _options, theme) => {
 		if (!entry.data) return undefined;
@@ -151,6 +174,7 @@ export default function (pi: ExtensionAPI) {
 		sessionOff.clear();
 		const errors: string[] = [];
 		updateStatus(ctx, offMode(projectDir(ctx), errors));
+		updateStfuStatus(ctx);
 		notifyErrors(ctx, errors);
 	});
 
@@ -208,7 +232,13 @@ export default function (pi: ExtensionAPI) {
 			return { block: true, reason: `Blocked by permission policy:\n${why}` };
 		}
 
-		const target: CallTarget = { tool: event.toolName, input, absPath: d.absPath, protected: d.protected };
+		const target: CallTarget = {
+			tool: event.toolName,
+			input,
+			absPath: d.absPath,
+			dirs: d.workingDirs,
+			protected: d.protected,
+		};
 
 		if (sessionGrants.some((g) => grantMatches(g, target))) return undefined;
 
@@ -230,7 +260,10 @@ export default function (pi: ExtensionAPI) {
 
 		const granted = choices.find((c) => c.key === choice.key)?.grant;
 
-		if (granted) sessionGrants.push(granted);
+		if (granted) {
+			sessionGrants.push(granted);
+			updateStfuStatus(ctx);
+		}
 
 		return undefined;
 	});
@@ -306,6 +339,7 @@ export default function (pi: ExtensionAPI) {
 				if (sub === "" && flags.length === 0) show(ctx, dir);
 				else if (sub === "reset" && flags.length === 0) {
 					sessionGrants = [];
+					updateStfuStatus(ctx);
 					ctx.ui.notify("Session grants cleared", "info");
 				} else if (sub === "off" && (flags.length === 0 || (flags.length === 1 && flags[0] === "--session"))) {
 					await turnOff(ctx, dir, flags.length === 1);

@@ -49,8 +49,10 @@ export interface Decision {
 	absPath?: string;
 	/** The path as requested (absolute, symlinks not followed). Differs from `absPath` through a symlink. */
 	requestedPath?: string;
-	/** A write tool targets a protected permission file. */
+	/** A write tool targets a protected permission file, or a bash command that may write mentions one. */
 	protected?: boolean;
+	/** Bash: every directory the command may run in, following its `cd`s. Undefined when unknown. */
+	workingDirs?: string[];
 }
 
 export interface DecideOptions {
@@ -359,12 +361,21 @@ function decideBash(cfg: PermissionConfig, command: string, opts: DecideOptions)
 	const mentionsConfig = protectedPaths.some((p) => p.endsWith(CONFIG_NAME)) && command.includes(CONFIG_NAME);
 	const mentions = mentionsConfig || protectedPaths.some((p) => command.includes(p));
 
-	if (mentions && !(onlyReads && risky.length === 0)) {
+	const touchesProtected = mentions && !(onlyReads && risky.length === 0);
+
+	if (touchesProtected) {
 		action = strictest(action, "ask");
 		reasons.push(note("mentions a protected permission file"));
 	}
 
-	return { action, reasons };
+	const decision: Decision = { action, reasons };
+
+	if (wd.known) decision.workingDirs = wd.dirs;
+
+	// A grant never covers a command that may write a protected file.
+	if (touchesProtected) decision.protected = true;
+
+	return decision;
 }
 
 export function decide(cfg: PermissionConfig, toolName: string, input: JsonObject, opts: DecideOptions): Decision {

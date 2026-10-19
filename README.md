@@ -75,23 +75,18 @@ The prompt lists first what needs a decision, then folds what is already allowed
 | `y` / `n`                                 | Yes / No                                                                       |
 | `m`                                       | Yes, and add a message to the tool result (one line, `Esc` goes back)          |
 | `t`                                       | No, and tell pi what to do instead (one line, `Esc` goes back)                 |
-| `a` / `d`                                 | Always, for the rest of the session                                            |
+| `a` / `d`                                 | stfu pi on the folder / the folder and subfolders, for the rest of the session |
 | `←` `→` `Tab`                             | Change selection (also `↑` `↓` when options are one per row)                   |
 | Click an option                           | Select it; click it again to confirm (fullscreen mode only)                    |
 | `↑` `↓` `PgUp` `PgDn` `Home` `End`, wheel | Scroll (`↑` `↓` select instead when options are one per row)                   |
 | `Shift+↑` `Shift+↓`                       | Scroll, in any layout. In fullscreen Pi keeps `PgUp` `PgDn` for the transcript |
 | `Esc`                                     | No                                                                             |
 
-Each "always" option states what it covers:
+**stfu pi on a folder.** `a` ("stfu pi on <folder>/") gives every tool, bash included, total access to the folder the call works in, for the rest of the session; `d` ("…and subfolders") extends it to its subfolders. For file tools the folder is the file's; for bash, the folder the command runs in, following its `cd`s (no option is offered when that cannot be known). Tools without a path get `a`: any input.
 
-| Tool                         | `a`                | `d`                           |
-| ---------------------------- | ------------------ | ----------------------------- |
-| `read`, `ls`, `find`, `grep` | That directory     | That directory and subfolders |
-| `write`, `edit`              | That file          | That directory and subfolders |
-| `bash`                       | That exact command | -                             |
-| Tools without a path         | Any input          | -                             |
+Why folders and not commands: agents today send endless one-liners, chaining `cd`, pipes and inline scripts to do something complex in a single command (blame Opus 5.5 and Sol 6.1). An exact command never comes back twice, so "always this command" was useless. Trusting a folder is the decision that actually holds, for now at least.
 
-Grants live in memory and end with the session. They never cover protected files, and `deny` rules still apply.
+Total access means it: in bash, any command that runs in the folder is allowed, whatever paths it touches. The status bar shows `🤫 stfu pi on <folder>/` while a grant is active (`/**` with subfolders), so it is never forgotten; `/permissions reset` clears it. Grants live in memory and end with the session. They never cover protected files, and `deny` rules still apply.
 
 ## Turning it off
 

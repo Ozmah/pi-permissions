@@ -215,10 +215,11 @@ describe("tool calls", () => {
 		assert.ok(blocked(await bash("echo b", ctx({ key: "n" }))));
 	});
 
-	it("remembers 'always' for the exact command", async () => {
+	it("[a] gives total access to the folder the command runs in, deny rules still apply", async () => {
 		assert.equal(await bash("echo c", ctx({ key: "a" })), undefined);
-		assert.equal(await bash("echo c", ctx({ key: "n" })), undefined);
-		assert.ok(blocked(await bash("echo c ", ctx({ key: "n" }))));
+		assert.equal(await bash("touch x && echo other", ctx({ key: "n" })), undefined);
+		assert.ok(blocked(await bash("sudo ls", ctx({ key: "n" }))));
+		assert.ok(blocked(await bash(`cd ${home} && ls -la`, ctx({ key: "n" }))), "the cd leaves the folder");
 	});
 
 	it("denies when the agent run is aborted while prompting", async () => {
@@ -346,18 +347,27 @@ describe("always grants", () => {
 		assert.equal(await read(shot("nested/paste-3.png"), ctx({ key: "n" })), undefined);
 	});
 
-	it("[a] on edit allows only that file", async () => {
+	it("total access covers every tool in the folder, bash included", async () => {
 		const edit = (p: string, key: string) => call("edit", { path: p, edits: [] }, ctx({ key }));
 		assert.equal(await edit(path.join(project, "a.ts"), "a"), undefined);
-		assert.equal(await edit(path.join(project, "a.ts"), "n"), undefined);
-		assert.ok(blocked(await edit(path.join(project, "b.ts"), "n")));
+		assert.equal(await edit(path.join(project, "b.ts"), "n"), undefined);
+		assert.equal(await call("write", { path: path.join(project, "c.ts"), content: "" }, ctx({ key: "n" })), undefined);
+		assert.equal(await bash("rm c.ts", ctx({ key: "n" })), undefined);
+		assert.ok(blocked(await edit(path.join(project, "sub", "d.ts"), "n")), "[a] is not recursive");
+	});
+
+	it("shows active stfu grants in the status bar until reset", async () => {
+		await read(shot("paste-1.png"), ctx({ key: "d" }));
+		assert.ok(status.get("permissions-stfu")?.endsWith(`stfu pi on ${clipboard.replace(home, "~")}/**`));
+		await run("reset");
+		assert.equal(status.get("permissions-stfu"), undefined);
 	});
 
 	it("shows grants explicitly in the /permissions card", async () => {
 		await read(shot("paste-1.png"), ctx({ key: "a" }));
 		await run("");
 		const { grants } = lastCard().data;
-		assert.deepEqual(grants, [`read: in ${clipboard.replace(home, "~")}/`]);
+		assert.deepEqual(grants, [`stfu pi on ${clipboard.replace(home, "~")}/`]);
 	});
 });
 
@@ -386,7 +396,7 @@ describe("symlinks", () => {
 
 		await run("");
 		const { grants } = lastCard().data;
-		assert.ok(grants.includes(`read: in ${real.replace(home, "~")}/`));
+		assert.ok(grants.includes(`stfu pi on ${real.replace(home, "~")}/`));
 	});
 });
 
