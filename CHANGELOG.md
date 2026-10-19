@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
+
+The config format changed and the old one is ignored. Rules now list what must not happen (`halt`, `deny`, `ask`), anything without a rule asks, and "stfu pi" grants silence the prompts for a folder you trust. Read the Configuration section of the README before upgrading.
 
 - `ui.describe_commands` (default `false`): the bash tool gets an optional `description` argument where the agent says what the command does, shown in the prompt as `Agent says: …`. The description never reaches the shell and plays no part in the decision. It replaces Pi's `bash` registration, so another extension that does the same conflicts with it; it is read from the global config and needs `/reload`.
 - `/permissions stfu` removes one session grant, picked from a list or named by its folder (`/permissions stfu ~/dev/app`, with completion). `/permissions reset` still clears them all.

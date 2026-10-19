@@ -9,10 +9,10 @@ Every tool call is checked against your rules before it runs: allowed calls run,
 ## Install
 
 ```sh
-pi install git:github.com/Ozmah/pi-permissions@v0.3.0
+pi install git:github.com/Ozmah/pi-permissions@v0.5.0
 ```
 
-The `@v0.3.0` tag pins the version. Without it you get the latest commit of the default branch.
+The `@v0.5.0` tag pins the version. Without it you get the latest commit of the default branch.
 
 Create `~/.pi/agent/permissions.json` (start from [`permissions.example.json`](permissions.example.json)) and run `/reload`. Without it, every tool call asks.
 
@@ -64,7 +64,7 @@ Rules list what must not happen. Anything without a rule asks, and a "stfu pi" g
 | `yes-i-am-very-sure` | Runs without asking. The value is long and odd so nobody writes it by accident. | n/a             |
 | (no rule)            | Asks. Reads inside the project run when `readonly` is on.                       | Yes             |
 
-`"allow"` is rejected with an error that points to `"yes-i-am-very-sure"`. A config that still uses the keys from before 0.4 (`default`, `external_directory`, `bash`, `readonly_commands`) gets an error, and those keys are ignored.
+`"allow"` is rejected with an error that points to `"yes-i-am-very-sure"`. A config that still uses the keys from before 0.5 (`default`, `external_directory`, `bash`, `readonly_commands`) gets an error, and those keys are ignored.
 
 `~/.pi/agent/permissions.json` is global. `<project>/.pi/permissions.json` applies to that project, only if it is trusted, and overrides the global file key by key. Both are read on every call; no `/reload` needed.
 

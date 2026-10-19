@@ -57,7 +57,7 @@ export interface JsonObject {
 const RULES: ReadonlySet<string> = new Set<Rule>([VERY_SURE, "ask", "deny", "halt"]);
 const POSITIONS: ReadonlySet<string> = new Set<PromptPosition>(["editor", "center", "top"]);
 
-/** Keys of the pre-0.4 format, reported so an old config is not silently ignored. */
+/** Keys of the pre-0.5 format, reported so an old config is not silently ignored. */
 const LEGACY_KEYS = ["default", "external_directory", "bash", "readonly_commands"];
 
 export function isRule(value: unknown): value is Rule {
