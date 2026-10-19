@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { type CallTarget, describeGrant, grantChoices, grantMatches, shortPath } from "../src/grants.ts";
+import { type CallTarget, describeGrant, grantChoices, grantMatches, shortPath, whyNotCovered } from "../src/grants.ts";
 
 // Real directories so "is this path a directory" checks behave like in use.
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-permissions-grants-")));
@@ -123,6 +123,37 @@ describe("grantMatches", () => {
 		const grant = { kind: "tool", tool: "mcp__x" } as const;
 		assert.ok(grantMatches(grant, { tool: "mcp__x", input: { a: 1 } }));
 		assert.ok(!grantMatches(grant, { tool: "mcp__y", input: {} }));
+	});
+});
+
+describe("whyNotCovered", () => {
+	const folder = { kind: "access", dir: clipboard, recursive: false } as const;
+	const tree = { kind: "access", dir: clipboard, recursive: true } as const;
+	const nested = shot("nested");
+
+	it("explains a subfolder that a folder-only grant does not reach", () => {
+		assert.equal(
+			whyNotCovered(folder, bash([clipboard, nested])),
+			`${shortPath(nested)} is in a subfolder, and [d] would include subfolders`,
+		);
+		assert.match(whyNotCovered(folder, read(shot("nested/a.png"))) ?? "", /is in a subfolder/);
+	});
+
+	it("explains a cd that leaves the folder", () => {
+		assert.equal(
+			whyNotCovered(tree, bash([clipboard, root])),
+			`it may also run in ${shortPath(root)}, outside that folder`,
+		);
+	});
+
+	it("explains a call that always asks", () => {
+		assert.match(whyNotCovered(tree, edit(shot("a.ts"), true)) ?? "", /^this call always asks/);
+	});
+
+	it("says nothing when the grant covers the call, or the call never touches its folder", () => {
+		assert.equal(whyNotCovered(tree, bash([clipboard, nested])), undefined);
+		assert.equal(whyNotCovered(folder, read(path.join(root, "other.png"))), undefined);
+		assert.equal(whyNotCovered({ kind: "tool", tool: "mcp__x" }, read(shot("a.png"))), undefined);
 	});
 });
 

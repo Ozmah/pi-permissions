@@ -87,6 +87,26 @@ export function grantMatches(grant: Grant, target: CallTarget): boolean {
 	return target.dirs !== undefined && target.dirs.every((d) => covers(grant, d, true));
 }
 
+/**
+ * Why a folder grant does not cover a call that touches its folder, for the
+ * prompt. Undefined when it covers the call, or the call never touches its folder.
+ */
+export function whyNotCovered(grant: Grant, target: CallTarget): string | undefined {
+	if (grant.kind !== "access" || grantMatches(grant, target)) return undefined;
+	const places = target.absPath ? [target.absPath] : (target.dirs ?? []);
+
+	if (!places.some((p) => isInside(p, grant.dir))) return undefined;
+
+	if (target.firm) return "this call always asks (an ask rule, a protected file or a strict rule it mentions)";
+	const isDir = !target.absPath;
+	const outside = places.find((p) => !isInside(p, grant.dir));
+
+	if (outside) return `it may also run in ${shortPath(outside)}, outside that folder`;
+	const deeper = places.find((p) => !covers(grant, p, isDir));
+
+	return deeper ? `${shortPath(deeper)} is in a subfolder, and [d] would include subfolders` : undefined;
+}
+
 /** Home as `~`, and long paths reduced to their last segments: `…/Temp/soloterm-clipboard`. */
 export function shortPath(p: string): string {
 	const home = os.homedir();

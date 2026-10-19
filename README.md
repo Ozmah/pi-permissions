@@ -123,7 +123,7 @@ Writing the permission files or the extension's own files always asks, whatever 
 
 Why folders and not commands: agents today send endless one-liners, chaining `cd`, pipes and inline scripts to do something complex in a single command (blame Opus 5.5 and Sol 6.1). An exact command never comes back twice, so "always this command" was useless. Trusting a folder is the decision that actually holds, for now at least.
 
-In bash, total access allows any command that runs in the folder, whatever paths it touches. While a grant is active the status bar shows `🤫 stfu pi on <folder>/` (`/**` with subfolders), and `/permissions reset` clears it. Grants live in memory and end with the session. They never cover protected files or `halt`, `deny` and `ask` rules.
+In bash, total access allows any command that runs in the folder, whatever paths it touches. While a grant is active the status bar shows `🤫 stfu pi on <folder>/` (`/**` with subfolders), and `/permissions reset` clears it. Grants live in memory and end with the session. They never cover protected files or `halt`, `deny` and `ask` rules. When an active grant touches a call but does not cover it, the prompt says why first, for example: `stfu pi on ~/dev/app/ → does not cover this call: ~/dev/app/src is in a subfolder, and [d] would include subfolders`.
 
 ## Turning it off
 

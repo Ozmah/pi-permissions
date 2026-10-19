@@ -31,7 +31,9 @@ export type Reason =
 	/** `why` says what keeps a read-only command from running: a path outside the project, a path rule. */
 	| { kind: "readonly"; subject: string; action: Verdict; why?: string }
 	| { kind: "note"; subject: string; action: "ask" }
-	| { kind: "skipped"; subject: string; why: string };
+	| { kind: "skipped"; subject: string; why: string }
+	/** An active grant that touches the call but does not cover it; `subject` describes the grant. */
+	| { kind: "uncovered"; subject: string; why: string };
 
 export function formatReason(r: Reason): string {
 	switch (r.kind) {
@@ -49,12 +51,14 @@ export function formatReason(r: Reason): string {
 			return `${r.subject} → requires confirmation`;
 		case "skipped":
 			return `${r.subject} → not read-only: ${r.why}`;
+		case "uncovered":
+			return `${r.subject} → does not cover this call: ${r.why}`;
 	}
 }
 
 /** Reasons the user has to weigh: anything not plainly allowed. Allowed ones are context. */
 export function needsDecision(r: Reason): boolean {
-	return r.kind === "skipped" || r.action !== "allow";
+	return r.kind === "skipped" || r.kind === "uncovered" || r.action !== "allow";
 }
 
 export interface Decision {

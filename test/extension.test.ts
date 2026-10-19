@@ -221,6 +221,27 @@ describe("tool calls", () => {
 		);
 	});
 
+	it("says when an active grant touches a call but does not cover it", async () => {
+		fs.mkdirSync(path.join(project, "packages", "date"), { recursive: true });
+		assert.equal(await bash("make one", ctx({ key: "a" })), undefined);
+
+		let rendered = "";
+		const c = ctx({ key: "n" });
+		const custom = c.ui.custom;
+
+		c.ui.custom = (factory, options) =>
+			custom((host, th, kb, done) => {
+				const component = factory(host, th, kb, done);
+				rendered = component.render(200).join("\n");
+
+				return component;
+			}, options);
+
+		assert.ok(blocked(await bash("cd packages/date && make two", c)));
+		assert.ok(rendered.includes(`stfu pi on ${project.replace(home, "~")}/ → does not cover this call:`));
+		assert.ok(rendered.includes("is in a subfolder, and [d] would include subfolders"));
+	});
+
 	it("an ask rule asks even with a stfu grant", async () => {
 		assert.equal(await bash("make stfu", ctx({ key: "d" })), undefined);
 		assert.equal(await bash("make covered", ctx({ key: "n" })), undefined);

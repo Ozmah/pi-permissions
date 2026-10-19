@@ -23,7 +23,7 @@ import {
 	readConfigFile,
 } from "./config.ts";
 import { type MarkdownTheme, highlightMarkdown } from "./markdown.ts";
-import { decide, formatReason, needsDecision, resolvePath } from "./policy.ts";
+import { type Reason, decide, formatReason, needsDecision, resolvePath } from "./policy.ts";
 import {
 	type CallTarget,
 	type Grant,
@@ -32,6 +32,7 @@ import {
 	grantChoices,
 	grantMatches,
 	shortPath,
+	whyNotCovered,
 } from "./grants.ts";
 import { BASE_CHOICES, type BodyLine, MESSAGE, NO, PermissionPrompt, TELL, inputSpec } from "./prompt-ui.ts";
 import { readState, setDisabled, writeState } from "./state.ts";
@@ -260,7 +261,15 @@ export default function (pi: ExtensionAPI) {
 
 		if (!ctx.hasUI) return { block: true, reason: `Requires confirmation but no UI is available:\n${why}` };
 
-		const body = buildBody(event.toolName, input, d.absPath, d.reasons, bodyDeps(ctx.ui.theme), d.requestedPath);
+		// An active grant that touches this call but does not cover it is said first: it explains why it still asks.
+		const uncovered: Reason[] = sessionGrants.flatMap((g) => {
+			const reason = whyNotCovered(g, target);
+
+			return reason ? [{ kind: "uncovered", subject: describeGrant(g), why: reason }] : [];
+		});
+
+		const reasons = [...uncovered, ...d.reasons];
+		const body = buildBody(event.toolName, input, d.absPath, reasons, bodyDeps(ctx.ui.theme), d.requestedPath);
 		const choices = grantChoices(target);
 		const choice = await ask(ctx, `🔐 ${event.toolName} requires permission`, body, cfg.ui.position, choices);
 

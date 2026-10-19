@@ -168,6 +168,8 @@ export function reasonSpans(r: Reason): Span[] {
 	];
 
 	if (r.kind === "skipped") return [...head, muted(`not read-only: ${r.why}`)];
+
+	if (r.kind === "uncovered") return [...head, muted(`does not cover this call: ${r.why}`)];
 	const action: Span = { text: r.action, color: ACTION_COLOR[r.action] };
 
 	switch (r.kind) {
