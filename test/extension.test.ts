@@ -243,6 +243,25 @@ describe("tool calls", () => {
 		assert.ok(rendered.includes("is in a subfolder, and [d] would include subfolders"));
 	});
 
+	it("an ask rule on a tool without a path is never silenced by an any-input grant", async () => {
+		writeConfig({ tools: { mcp__x: "ask" } });
+		const offered: string[] = [];
+		const c = ctx({ key: "y" });
+		const custom = c.ui.custom;
+
+		c.ui.custom = (factory, options) =>
+			custom((host, th, kb, done) => {
+				const component = factory(host, th, kb, done);
+				offered.push(component.render(200).join("\n"));
+
+				return component;
+			}, options);
+
+		assert.equal(await call("mcp__x", {}, c), undefined);
+		assert.ok(!offered.join("").includes("Always:"), "no any-input option is offered");
+		assert.ok(blocked(await call("mcp__x", {}, ctx({ key: "n" }))), "the next call still asks");
+	});
+
 	it("an ask rule asks even with a stfu grant", async () => {
 		assert.equal(await bash("make stfu", ctx({ key: "d" })), undefined);
 		assert.equal(await bash("make covered", ctx({ key: "n" })), undefined);

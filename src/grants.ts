@@ -81,9 +81,10 @@ function covers(grant: { dir: string; recursive: boolean }, p: string, isDir: bo
 }
 
 export function grantMatches(grant: Grant, target: CallTarget): boolean {
-	if (grant.kind === "tool") return grant.tool === target.tool && !target.absPath;
-
+	// First, for every kind of grant: a firm question (an `ask` rule, a protected file) is never covered.
 	if (target.firm) return false;
+
+	if (grant.kind === "tool") return grant.tool === target.tool && !target.absPath;
 
 	if (target.absPath) return covers(grant, target.absPath, false);
 
@@ -132,6 +133,8 @@ export function describeGrant(grant: Grant): string {
 
 /** The "always" options offered for a call, each with an explicit label. */
 export function grantChoices(target: CallTarget): GrantChoice[] {
+	// A firm question is never covered by a grant, so none is offered.
+	if (target.firm) return [];
 	const folder = folderOf(target);
 
 	if (!folder) {
@@ -142,8 +145,6 @@ export function grantChoices(target: CallTarget): GrantChoice[] {
 		return [{ key: "a", label: `Always: ${tool} (any input)`, grant: { kind: "tool", tool } }];
 	}
 
-	// A firm question is never covered by a grant, so none is offered.
-	if (target.firm) return [];
 	const short = shortPath(folder);
 
 	return [

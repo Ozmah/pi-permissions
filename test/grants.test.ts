@@ -127,6 +127,12 @@ describe("grantMatches", () => {
 		assert.ok(!grantMatches(tree, bash([clipboard], true)));
 	});
 
+	it("never covers or offers a grant for a firm call to a tool without a path", () => {
+		const firm: CallTarget = { tool: "mcp__x", input: {}, firm: true };
+		assert.equal(grantMatches({ kind: "tool", tool: "mcp__x" }, firm), false);
+		assert.deepEqual(grantChoices(firm), []);
+	});
+
 	it("any-input grants cover only their tool", () => {
 		const grant = { kind: "tool", tool: "mcp__x" } as const;
 		assert.ok(grantMatches(grant, { tool: "mcp__x", input: { a: 1 } }));
