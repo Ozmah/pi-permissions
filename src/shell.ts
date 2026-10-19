@@ -124,6 +124,143 @@ export function parseShell(command: string): ShellAnalysis {
 	return { segments, risky: [...risky] };
 }
 
+/** A shell word after quote removal. */
+export interface Word {
+	kind: "word";
+	value: string;
+	/** Contains `$` or a backquote: its value is only known at run time. */
+	dynamic: boolean;
+	/** Contains an unquoted `*`, `?` or `[`: the shell expands it to matching paths. */
+	glob: boolean;
+	/** Starts with an unquoted `~` or `~/`, which the shell expands to the home directory. */
+	tilde: boolean;
+	/** Some part of it was quoted or escaped. */
+	quoted: boolean;
+}
+
+/** A redirection operator, with its fd prefix: `<`, `2>`, `>>`, `&>`, `<<`, `>&`. Its target is the next word. */
+export interface Redirect {
+	kind: "redirect";
+	op: string;
+}
+
+export type Token = Word | Redirect;
+
+const REDIRECT_OPS = ["<<<", "<<", "<&", "<>", "<", ">>", ">|", ">&", ">"];
+
+/**
+ * Splits one segment (from `parseShell`) into words and redirections. Returns
+ * undefined for syntax it does not model (subshells, groups, brace expansion,
+ * comments, unclosed quotes): callers must then treat the segment as unknown.
+ */
+export function tokenize(text: string): Token[] | undefined {
+	const tokens: Token[] = [];
+	let word: Word | undefined;
+
+	const current = (): Word => {
+		word ??= { kind: "word", value: "", dynamic: false, glob: false, tilde: false, quoted: false };
+
+		return word;
+	};
+
+	const end = () => {
+		if (!word) return;
+
+		// `~user`, `~+`, `~-` expand to directories that cannot be known here.
+		if (word.tilde && word.value !== "~" && !word.value.startsWith("~/")) word.dynamic = true;
+		tokens.push(word);
+		word = undefined;
+	};
+
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+
+		if (ch === "'") {
+			const close = text.indexOf("'", i + 1);
+
+			if (close < 0) return undefined;
+			const w = current();
+			w.value += text.slice(i + 1, close);
+			w.quoted = true;
+			i = close;
+			continue;
+		}
+
+		if (ch === '"') {
+			const w = current();
+			w.quoted = true;
+			let j = i + 1;
+
+			for (; j < text.length && text[j] !== '"'; j++) {
+				const c = text[j];
+
+				if (c === "\\" && '$`"\\'.includes(text[j + 1] ?? "")) {
+					w.value += text[j + 1];
+					j++;
+					continue;
+				}
+
+				if (c === "$" || c === "`") w.dynamic = true;
+				w.value += c;
+			}
+
+			if (j >= text.length) return undefined;
+			i = j;
+			continue;
+		}
+
+		if (ch === "\\") {
+			if (i + 1 >= text.length) return undefined;
+			const w = current();
+			w.value += text[i + 1];
+			w.quoted = true;
+			i++;
+			continue;
+		}
+
+		if (/\s/.test(ch)) {
+			end();
+			continue;
+		}
+
+		if (ch === "<" || ch === ">" || (ch === "&" && text[i + 1] === ">")) {
+			// An unquoted all-digit word right before the operator is its fd (`2>`).
+			let op = "";
+
+			if (word && !word.quoted && /^\d+$/.test(word.value)) {
+				op = word.value;
+				word = undefined;
+			} else end();
+
+			if (ch === "&") {
+				op += "&";
+				i++;
+			}
+
+			const rest = text.slice(i);
+			const found = REDIRECT_OPS.find((o) => rest.startsWith(o)) ?? text[i];
+			tokens.push({ kind: "redirect", op: op + found });
+			i += found.length - 1;
+			continue;
+		}
+
+		// Subshells, groups, brace expansion, comments, stray operators.
+		if ("(){}|;&".includes(ch) || (ch === "#" && !word)) return undefined;
+		const w = current();
+
+		if (ch === "$" || ch === "`") w.dynamic = true;
+
+		if (ch === "*" || ch === "?" || ch === "[") w.glob = true;
+
+		if (ch === "~" && w.value === "" && !w.quoted) w.tilde = true;
+		w.value += ch;
+	}
+
+	end();
+
+	return tokens;
+}
+
 /** Collapses whitespace for rule matching. */
 export function normalizeSegment(text: string): string {
 	return text.replace(/\s+/g, " ");

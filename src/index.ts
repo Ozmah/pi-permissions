@@ -195,7 +195,7 @@ export default function (pi: ExtensionAPI) {
 		const protectedPaths = [GLOBAL_CONFIG, STATE_FILE, path.join(cwd, PROJECT_CONFIG)];
 
 		if (EXTENSION_ROOT) protectedPaths.push(EXTENSION_ROOT);
-		const d = decide(cfg, event.toolName, input, { cwd, protectedPaths });
+		const d = decide(cfg, event.toolName, input, { cwd, protectedPaths, cdpath: process.env.CDPATH });
 
 		if (d.action === "allow") return undefined;
 
@@ -280,6 +280,7 @@ export default function (pi: ExtensionAPI) {
 			tools: cfg.tools,
 			external_directory: cfg.external_directory,
 			bash: cfg.bash,
+			readonly_commands: cfg.readonly_commands,
 			grants: sessionGrants.map(describeGrant),
 			disabled,
 			errors: [...errors, ...configErrors],

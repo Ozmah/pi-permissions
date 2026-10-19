@@ -29,6 +29,8 @@ export interface Summary {
 	tools: RuleMap;
 	external_directory: RuleMap;
 	bash: RuleMap;
+	/** Unset: read-only command detection is off. */
+	readonly_commands?: Action;
 	grants: string[];
 	disabled: string[];
 	errors: string[];
@@ -72,6 +74,7 @@ export function renderSummary(s: Summary, t: SummaryTheme): string[] {
 	for (const f of files.slice(1)) lines.push(`${" ".repeat(LABEL_WIDTH)}${f}`);
 	lines.push(`${label("Default")}${action(s.default)}`);
 	lines.push(`${label("Prompt")}${s.position}`);
+	lines.push(`${label("Read-only")}${s.readonly_commands ? action(s.readonly_commands) : t.fg("dim", "off")}`);
 
 	const section = (title: string, rules: RuleMap) => {
 		lines.push("", heading(title));

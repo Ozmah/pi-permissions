@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `readonly_commands`: bash segments that only read (`cat`, `grep`, `head`, `rg`, `find`, `cd`...) take this action when every path they read is inside the project or allowed by `external_directory`. Off unless set; explicit `bash` rules still win. Operands, `--flag=value` values and `< file` are checked as paths; `cd` is followed; flags that write or run programs disqualify the segment.
+- A bash command made only of read-only segments may mention the permission files and the extension's own files without asking: the protection is against writes.
 - `m`: "Yes, with a message". Approves the call and appends one line from the user to its result, so the agent reads it with the output. An empty message is a plain Yes.
 - When the options are stacked one per row, `↑` `↓` change the selection instead of scrolling; `PgUp` `PgDn` `Home` `End` and the wheel still scroll. The hint shows the keys for the current layout.
 - Options are clickable in fullscreen mode: the first click selects, a second click on the same option confirms. A single stray click never approves.

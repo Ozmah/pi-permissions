@@ -38,6 +38,7 @@ Run `/permissions` to see the active rules, session grants and available command
 | `tools`              | Tools by name: `read`, `write`, `edit`, `ls`, `find`, `grep`, MCP and extension tools. |
 | `external_directory` | Paths outside the working directory. Unmatched paths ask.                              |
 | `bash`               | Each segment of a bash command.                                                        |
+| `readonly_commands`  | Bash segments that only read, see below. Unset: off.                                   |
 | `ui.position`        | `editor` (replaces the input), `center` or `top`.                                      |
 
 Values: `allow`, `ask`, `deny`.
@@ -50,7 +51,15 @@ Values: `allow`, `ask`, `deny`.
 
 **Bash.** Commands are split on `&&`, `||`, `|`, `;`, `&` and newlines, outside quotes, and every segment is checked. Command substitution, process substitution, redirection to a file and unclosed quotes always ask.
 
-**Protected files.** Writing the permission files or the extension's own files always asks, whatever the rules.
+**Read-only commands.** With `"readonly_commands": "allow"`, a segment that only reads gets that action when every path it reads is inside the project or allowed by `external_directory`, so `cd apps/server && grep -n foo src/*.ts | head -20` runs without asking. Explicit `bash` rules still win; it only replaces the `"*"` fallback or the default, and never makes them stricter.
+
+- Commands: `cat`, `head`, `tail`, `wc`, `ls`, `cut`, `grep`, `egrep`, `fgrep`, `rg`, `find`, `sort`, `uniq`, `echo`, `pwd`, `cd`.
+- Flags that write, run programs or follow symlinks disqualify the segment: `find -exec/-delete/-fprint/-L`, `rg --pre/-L`, `grep -R`, `sort -o`, `tail -f`, `uniq in out`. So do output redirections other than `/dev/null` or an fd, and here-documents.
+- Every operand is checked as a path, patterns included. `grep "/api" src` asks for `/api` when it is outside the project: a wrong guess adds a prompt, never skips one. Input redirections (`< file`) are checked too.
+- `cd` is followed: later relative paths are checked against every directory the command may be in. `cd -`, `cd $VAR`, `pushd`, `builtin`, `eval`, assignments, and `cd name` with `$CDPATH` set lose track, and later relative paths ask.
+- Variables, `~user`, subshells, brace expansion and comments are not resolved: the segment asks. A glob is checked by its fixed directory (`src/*.ts` → `src`); `..` after a wildcard asks.
+
+**Protected files.** Writing the permission files or the extension's own files always asks, whatever the rules. A bash command that mentions them asks too, unless every segment is a read-only command.
 
 ## Prompt
 
@@ -88,6 +97,7 @@ Grants live in memory and end with the session. They never cover protected files
 - Bash can touch paths that cannot be detected from the command text. Keep `"*": "ask"` in `bash`.
 - A trailing `*` allows any argument, and some read-only commands can write through options (`git log --output=<file>`).
 - The bash scanner is not a full shell parser. When unsure, it asks.
+- Read-only commands: a glob that matches a symlink inside the project can read where the symlink points.
 - While disabled, the agent can write any file, including the permission files.
 
 ## Development

@@ -5,7 +5,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type Action, type JsonObject, type PermissionConfig, type RuleMap, isString } from "./config.ts";
-import { normalizeSegment, parseShell } from "./shell.ts";
+import { type PathArg, analyzeReadonly, cdEffect } from "./readonly.ts";
+import { type Token, normalizeSegment, parseShell, tokenize } from "./shell.ts";
 
 /**
  * Why an action was reached. `fallback` is a `"*"` rule, reported apart so it
@@ -14,7 +15,9 @@ import { normalizeSegment, parseShell } from "./shell.ts";
 export type Reason =
 	| { kind: "match"; subject: string; section: string; pattern: string; action: Action }
 	| { kind: "fallback" | "default"; subject: string; section: string; action: Action }
-	| { kind: "note"; subject: string; action: "ask" };
+	| { kind: "note"; subject: string; action: "ask" }
+	| { kind: "readonly"; subject: string; action: Action }
+	| { kind: "skipped"; subject: string; why: string };
 
 export function formatReason(r: Reason): string {
 	switch (r.kind) {
@@ -26,6 +29,10 @@ export function formatReason(r: Reason): string {
 			return `${r.subject} → no matching ${r.section} rule (default: ${r.action})`;
 		case "note":
 			return `${r.subject} → requires confirmation`;
+		case "readonly":
+			return `${r.subject} → read-only command: ${r.action}`;
+		case "skipped":
+			return `${r.subject} → not read-only: ${r.why}`;
 	}
 }
 
@@ -48,6 +55,8 @@ export interface DecideOptions {
 	 * rules say (the permission config itself, the extension's own code).
 	 */
 	protectedPaths?: string[];
+	/** $CDPATH, which changes where `cd name` goes. */
+	cdpath?: string;
 }
 
 const RANK: Record<Action, number> = { allow: 0, ask: 1, deny: 2 };
@@ -197,20 +206,137 @@ function decidePath(cfg: PermissionConfig, absPath: string, cwd: string): Decisi
 	return { action, reasons: [explain("outside project", "external_directory", hit, action)] };
 }
 
-function decideBash(cfg: PermissionConfig, command: string, protectedPaths: string[]): Decision {
+/**
+ * Directories a segment may run in. `cd` adds one and keeps the previous ones
+ * (it can fail, or run in a pipeline subshell); anything that may change the
+ * directory in a way that cannot be followed makes it unknown.
+ */
+interface WorkingDirs {
+	dirs: string[];
+	known: boolean;
+}
+
+/** A path argument resolved: `real` follows symlinks (rules use it), `requested` does not (shown to the user). */
+interface ResolvedArg {
+	real: string;
+	requested: string;
+}
+
+/** Resolves a path argument. A quoted `~` is a literal name, not home. */
+function argPath(arg: PathArg, dir: string): ResolvedArg {
+	const value = !arg.tilde && arg.value.startsWith("~") ? `./${arg.value}` : arg.value;
+
+	return { real: resolvePath(value, dir), requested: path.resolve(dir, expandHome(value)) };
+}
+
+function isAbsoluteArg(arg: PathArg): boolean {
+	return arg.tilde || path.isAbsolute(arg.value);
+}
+
+/** Every path `arg` can resolve to: one if absolute, one per possible working directory otherwise. */
+function argPaths(arg: PathArg, wd: WorkingDirs, project: string): ResolvedArg[] {
+	return isAbsoluteArg(arg) ? [argPath(arg, project)] : wd.dirs.map((d) => argPath(arg, d));
+}
+
+function followCd(tokens: Token[] | undefined, wd: WorkingDirs, opts: DecideOptions): void {
+	const effect = cdEffect(tokens, opts.cdpath);
+
+	if (effect.kind === "unknown") wd.known = false;
+
+	if (effect.kind !== "dir") return;
+
+	for (const { real } of argPaths(effect.target, wd, opts.cwd)) if (!wd.dirs.includes(real)) wd.dirs.push(real);
+}
+
+type ReadonlyOutcome = { action: Action; reasons: Reason[] } | { why: string };
+
+/**
+ * A read-only segment takes `readonly_commands`, made stricter by every path it
+ * reads outside the project, through `external_directory`.
+ */
+function decideReadonly(
+	cfg: PermissionConfig,
+	readonly: Action,
+	tokens: Token[],
+	wd: WorkingDirs,
+	opts: DecideOptions,
+): ReadonlyOutcome | undefined {
+	// Without operands, `ls`, `grep -r` or `find` read the working directory itself.
+	if (!wd.known) return { why: "the working directory is unknown after an earlier command" };
+	const [head] = tokens;
+	let paths: PathArg[];
+
+	if (head?.kind === "word" && head.value === "cd") {
+		const effect = cdEffect(tokens, opts.cdpath);
+
+		if (effect.kind !== "dir") return { why: "the target directory cannot be known" };
+		paths = [effect.target];
+	} else {
+		const result = analyzeReadonly(tokens);
+
+		if (!result) return undefined;
+
+		if (!result.ok) return { why: result.why };
+		paths = result.paths;
+	}
+
+	let action = readonly;
+	const reasons: Reason[] = [];
+	const seen = new Set<string>();
+
+	for (const arg of paths) {
+		for (const { real, requested } of argPaths(arg, wd, opts.cwd)) {
+			if (seen.has(real) || isInside(real, opts.cwd)) continue;
+			seen.add(real);
+			const hit = resolveRules(cfg.external_directory, real, expandHome);
+			const a = hit?.action ?? "ask";
+			const subject = real === requested ? real : `${real} (symlink from ${requested})`;
+			reasons.push(explain(subject, "external_directory", hit, a));
+			action = strictest(action, a);
+		}
+	}
+
+	return { action, reasons };
+}
+
+function decideBash(cfg: PermissionConfig, command: string, opts: DecideOptions): Decision {
+	const protectedPaths = opts.protectedPaths ?? [];
 	const { segments, risky } = parseShell(command);
 
 	if (segments.length === 0) return { action: "ask", reasons: [note("empty command")] };
 
 	let action: Action = "allow";
 	const reasons: Reason[] = [];
+	const wd: WorkingDirs = { dirs: [opts.cwd], known: true };
+	const readonly = cfg.readonly_commands;
+	/** Every segment passed the read-only analysis, so none of them can write. */
+	let onlyReads = true;
 
 	for (const seg of segments) {
 		const text = normalizeSegment(seg.text);
+		const subject = `"${snippet(text)}"`;
+		const tokens = tokenize(seg.text);
 		const hit = resolveRules(cfg.bash, text);
-		const a = hit?.action ?? cfg.default;
-		reasons.push(explain(`"${snippet(text)}"`, "bash", hit, a));
-		action = strictest(action, a);
+		const ruleAction = hit?.action ?? cfg.default;
+		let segAction = ruleAction;
+		let segReasons = [explain(subject, "bash", hit, ruleAction)];
+
+		// Read-only analysis can only loosen the "*" fallback or the default; explicit rules always win.
+		const explicit = hit !== undefined && hit.pattern !== "*";
+		const looser = readonly !== undefined && RANK[readonly] < RANK[ruleAction];
+		const ro = readonly && looser && !explicit && tokens ? decideReadonly(cfg, readonly, tokens, wd, opts) : undefined;
+
+		if (ro && "why" in ro) {
+			segReasons.push({ kind: "skipped", subject, why: ro.why });
+			onlyReads = false;
+		} else if (ro && readonly && RANK[ro.action] <= RANK[ruleAction]) {
+			segAction = ro.action;
+			segReasons = [{ kind: "readonly", subject, action: readonly }, ...ro.reasons];
+		} else onlyReads = false;
+
+		reasons.push(...segReasons);
+		action = strictest(action, segAction);
+		followCd(tokens, wd, opts);
 	}
 
 	if (risky.length) {
@@ -219,10 +345,12 @@ function decideBash(cfg: PermissionConfig, command: string, protectedPaths: stri
 	}
 
 	// Best effort: bash can write anywhere, so mentioning a protected path (absolute, or
-	// any `permissions.json`, which covers relative forms) requires confirmation.
+	// any `permissions.json`, which covers relative forms) requires confirmation. The
+	// protection is against writes: a command made only of read-only segments is exempt.
 	const mentionsConfig = protectedPaths.some((p) => p.endsWith(CONFIG_NAME)) && command.includes(CONFIG_NAME);
+	const mentions = mentionsConfig || protectedPaths.some((p) => command.includes(p));
 
-	if (mentionsConfig || protectedPaths.some((p) => command.includes(p))) {
+	if (mentions && !(onlyReads && risky.length === 0)) {
 		action = strictest(action, "ask");
 		reasons.push(note("mentions a protected permission file"));
 	}
@@ -233,7 +361,7 @@ function decideBash(cfg: PermissionConfig, command: string, protectedPaths: stri
 export function decide(cfg: PermissionConfig, toolName: string, input: JsonObject, opts: DecideOptions): Decision {
 	const protectedPaths = opts.protectedPaths ?? [];
 
-	if (toolName === "bash") return decideBash(cfg, isString(input.command) ? input.command : "", protectedPaths);
+	if (toolName === "bash") return decideBash(cfg, isString(input.command) ? input.command : "", opts);
 
 	const tool = decideTool(cfg, toolName);
 

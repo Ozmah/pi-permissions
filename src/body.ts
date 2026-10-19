@@ -122,7 +122,6 @@ function editBody(edits: Json[], lang: string | undefined, deps: BodyDeps): Body
 
 /** Colored runs for a reason. Joined, their text equals `formatReason(r)`. */
 export function reasonSpans(r: Reason): Span[] {
-	const action: Span = { text: r.action, color: ACTION_COLOR[r.action] };
 	const muted = (text: string): Span => ({ text, color: "muted" });
 
 	const head: Span[] = [
@@ -130,7 +129,12 @@ export function reasonSpans(r: Reason): Span[] {
 		{ text: " → ", color: "dim" },
 	];
 
+	if (r.kind === "skipped") return [...head, muted(`not read-only: ${r.why}`)];
+	const action: Span = { text: r.action, color: ACTION_COLOR[r.action] };
+
 	switch (r.kind) {
+		case "readonly":
+			return [...head, muted("read-only command: "), action];
 		case "match":
 			return [
 				...head,

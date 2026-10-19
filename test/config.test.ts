@@ -34,6 +34,13 @@ describe("parseConfig", () => {
 		assert.equal(errors.length, 4);
 	});
 
+	it("accepts readonly_commands and reports invalid values", () => {
+		const errors: string[] = [];
+		assert.equal(parseConfig({ readonly_commands: "allow" }, "f", errors).readonly_commands, "allow");
+		assert.equal(parseConfig({ readonly_commands: true }, "f", errors).readonly_commands, undefined);
+		assert.equal(errors.length, 1);
+	});
+
 	it("rejects a non-object root", () => {
 		const errors: string[] = [];
 		assert.deepEqual(parseConfig([1], "f", errors), {});
@@ -46,6 +53,11 @@ describe("mergeConfigs", () => {
 		const cfg = mergeConfigs();
 		assert.equal(cfg.default, "ask");
 		assert.equal(cfg.ui.position, "editor");
+	});
+
+	it("leaves readonly_commands off unless a layer sets it", () => {
+		assert.equal(mergeConfigs().readonly_commands, undefined);
+		assert.equal(mergeConfigs({ readonly_commands: "allow" }, {}).readonly_commands, "allow");
 	});
 
 	it("lets later layers override key by key", () => {

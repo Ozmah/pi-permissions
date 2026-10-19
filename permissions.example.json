@@ -12,6 +12,7 @@
     "~/projects/*": "allow",
     "*": "ask"
   },
+  "readonly_commands": "allow",
   "bash": {
     "git status *": "allow",
     "git log *": "allow",

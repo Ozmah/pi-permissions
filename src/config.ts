@@ -23,6 +23,12 @@ export interface PermissionConfig {
 	tools: RuleMap;
 	external_directory: RuleMap;
 	bash: RuleMap;
+	/**
+	 * Action for bash segments recognized as read-only commands (`cat`, `grep`,
+	 * `head`, `cd`...) whose paths are inside the project or allowed by
+	 * `external_directory`. Unset: off. Only loosens the `"*"` fallback or the default.
+	 */
+	readonly_commands?: Action;
 	ui: { position: PromptPosition };
 }
 
@@ -116,6 +122,13 @@ export function parseConfig(raw: Json, source: string, errors: string[]): Partia
 		else errors.push(`${source}: invalid default ${JSON.stringify(raw.default)}`);
 	}
 
+	if (raw.readonly_commands !== undefined) {
+		const ro = raw.readonly_commands;
+
+		if (isAction(ro)) cfg.readonly_commands = ro;
+		else errors.push(`${source}: invalid readonly_commands ${JSON.stringify(ro)} (use allow/ask/deny)`);
+	}
+
 	if (raw.ui !== undefined) {
 		if (!isJsonObject(raw.ui)) errors.push(`${source}: ui must be an object`);
 		else if (raw.ui.position !== undefined) {
@@ -146,6 +159,8 @@ export function mergeConfigs(...layers: (PartialConfig | undefined)[]): Permissi
 		if (!c) continue;
 
 		if (c.default) out.default = c.default;
+
+		if (c.readonly_commands) out.readonly_commands = c.readonly_commands;
 		Object.assign(out.tools, c.tools);
 		Object.assign(out.external_directory, c.external_directory);
 		Object.assign(out.bash, c.bash);
