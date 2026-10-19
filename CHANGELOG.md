@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A `$` that expands nothing (`grep "^$"`, `a$ b`) is a literal `$`, no longer taken for a variable. Such commands were not recognized as read-only.
 - "stfu pi" is never offered for your home or the root folder. A `cd` that widened the command's folder to `~` used to offer it.
 - A read-only command that asks says why: "reads outside the project" or "a path rule applies". Operands that are no file (a `grep` pattern) are marked "no such file, checked as a path".
 - Breaking: rules now list what must not happen. They live in `commands` (bash segments), `paths` (any tool) and `tools`, and take one of four values. `halt` blocks and alerts you, `deny` blocks, `ask` asks every time even under stfu, and `yes-i-am-very-sure` runs without asking. `"allow"` is no longer accepted. Anything without a rule asks, and the strictest matching rule wins. The old keys (`default`, `external_directory`, `bash`, `readonly_commands`) are reported as an error and ignored.

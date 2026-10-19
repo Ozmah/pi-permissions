@@ -246,6 +246,19 @@ export interface Redirect {
 
 export type Token = Word | Redirect;
 
+/**
+ * Whether a `$` followed by `next` expands. It does before a name, a digit, a
+ * special parameter, `{` or `(`; unquoted also before `'` and `"` (`$'..'`,
+ * `$".."`). Anything else, like `$"` closing a string in `"^$"`, is a literal `$`.
+ */
+function dollarExpands(next: string | undefined, inDoubleQuotes: boolean): boolean {
+	if (next === undefined) return false;
+
+	if (/[A-Za-z0-9_{(@*#?$!-]/.test(next)) return true;
+
+	return !inDoubleQuotes && (next === "'" || next === '"');
+}
+
 const REDIRECT_OPS = ["<<<", "<<-", "<<", "<&", "<>", "<", ">>", ">|", ">&", ">"];
 
 /**
@@ -300,7 +313,7 @@ export function tokenize(text: string): Token[] | undefined {
 					continue;
 				}
 
-				if (c === "$" || c === "`") w.dynamic = true;
+				if (c === "`" || (c === "$" && dollarExpands(text[j + 1], true))) w.dynamic = true;
 				w.value += c;
 			}
 
@@ -348,7 +361,7 @@ export function tokenize(text: string): Token[] | undefined {
 		if ("(){}|;&".includes(ch) || (ch === "#" && !word)) return undefined;
 		const w = current();
 
-		if (ch === "$" || ch === "`") w.dynamic = true;
+		if (ch === "`" || (ch === "$" && dollarExpands(text[i + 1], false))) w.dynamic = true;
 
 		if (ch === "*" || ch === "?" || ch === "[") w.glob = true;
 

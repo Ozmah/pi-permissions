@@ -55,6 +55,18 @@ describe("tokenize", () => {
 		assert.ok(q?.kind === "word" && !q.tilde, "a quoted ~ is literal");
 	});
 
+	it("takes a $ that expands nothing as a literal", () => {
+		const dynamic = (text: string) => tokenize(`grep ${text}`)?.some((t) => t.kind === "word" && t.dynamic);
+		assert.equal(dynamic(`"^ \\*\\|^$"`), false, "$ closing a double-quoted string");
+		assert.equal(dynamic(`'^$'`), false);
+		assert.equal(dynamic(`"a$ b"`), false);
+		assert.equal(dynamic(`a$`), false);
+
+		for (const text of [`"$HOME"`, `"\${x}"`, `"$(id)"`, `"$1"`, `"$@"`, `$x`, `$'\n'`]) {
+			assert.equal(dynamic(text), true, text);
+		}
+	});
+
 	it("treats ~user as dynamic", () => {
 		const [, w] = tokenize("cat ~root/x") ?? [];
 		assert.ok(w?.kind === "word" && w.dynamic);
