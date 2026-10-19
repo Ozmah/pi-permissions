@@ -4,6 +4,8 @@ Permission prompts for [Pi](https://pi.dev), for the slightly paranoid.
 
 Every tool call is checked against your rules before it runs: allowed calls run, denied calls are blocked, everything else asks.
 
+**It observes and decides; it does not steer the agent.** Agents chain `cd`, pipes and inline scripts, and that is taken as a given: it changes no prompt, instruction or tool the agent sees. Its job is to let through what is safe and make what is not easy to judge.
+
 ## Install
 
 ```sh
