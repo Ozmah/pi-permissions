@@ -24,7 +24,9 @@ fs.mkdirSync(agentDir, { recursive: true });
 // Resolved like the extension does (e.g. /tmp is a symlink on macOS).
 const project = fs.realpathSync(path.join(home, "project"));
 
-const baseConfig = { tools: { read: "allow" }, bash: { "git status *": "allow", "sudo *": "deny", "*": "ask" } };
+const baseConfig = {
+	commands: { "git status *": "yes-i-am-very-sure", "sudo *": "deny", "rm -rf /*": "halt", "git push *": "ask" },
+};
 
 const writeConfig = (extra: JsonObject = {}) =>
 	fs.writeFileSync(configFile, JSON.stringify({ ...baseConfig, ...extra }));
@@ -210,35 +212,56 @@ describe("tool calls", () => {
 		assert.ok(blocked(await bash("sudo ls", ctx({ key: "y" }))));
 	});
 
+	it("halts: blocks, alerts the user and tells the agent it is a config rule", async () => {
+		const result = await bash("rm -rf /", ctx({ key: "y" }));
+		assert.ok(blocked(result));
+		assert.match(result?.reason ?? "", /^Halted: the user's permission config sets this to halt/);
+		assert.ok(
+			notes.at(-1)?.startsWith("\u{1F6D1} Halted: bash tried something set to halt in your permissions config"),
+		);
+	});
+
+	it("an ask rule asks even with a stfu grant", async () => {
+		assert.equal(await bash("make stfu", ctx({ key: "d" })), undefined);
+		assert.equal(await bash("make covered", ctx({ key: "n" })), undefined);
+		assert.ok(blocked(await bash("git push", ctx({ key: "n" }))));
+	});
+
+	it("reports a config in the old format", async () => {
+		writeConfig({ default: "ask", bash: { "*": "ask" } });
+		await bash("make old", ctx({ key: "y" }));
+		assert.ok(notes.some((n) => n.includes("default, bash: old format")));
+	});
+
 	it("runs on Yes and blocks on No", async () => {
-		assert.equal(await bash("echo a", ctx({ key: "y" })), undefined);
-		assert.ok(blocked(await bash("echo b", ctx({ key: "n" }))));
+		assert.equal(await bash("make a", ctx({ key: "y" })), undefined);
+		assert.ok(blocked(await bash("make b", ctx({ key: "n" }))));
 	});
 
 	it("[a] gives total access to the folder the command runs in, deny rules still apply", async () => {
-		assert.equal(await bash("echo c", ctx({ key: "a" })), undefined);
-		assert.equal(await bash("touch x && echo other", ctx({ key: "n" })), undefined);
+		assert.equal(await bash("make c", ctx({ key: "a" })), undefined);
+		assert.equal(await bash("touch x && make other", ctx({ key: "n" })), undefined);
 		assert.ok(blocked(await bash("sudo ls", ctx({ key: "n" }))));
 		assert.ok(blocked(await bash(`cd ${home} && ls -la`, ctx({ key: "n" }))), "the cd leaves the folder");
 	});
 
 	it("denies when the agent run is aborted while prompting", async () => {
 		const controller = new AbortController();
-		const pending = bash("echo d", ctx({ signal: controller.signal }));
+		const pending = bash("make d", ctx({ signal: controller.signal }));
 		controller.abort();
 		assert.ok(blocked(await pending));
 	});
 
 	it("blocks 'ask' calls when there is no UI", async () => {
-		assert.ok(blocked(await bash("echo e", ctx({ hasUI: false }))));
+		assert.ok(blocked(await bash("make e", ctx({ hasUI: false }))));
 	});
 
 	it("falls back to select() outside the TUI", async () => {
-		assert.equal(await bash("echo f", ctx({ mode: "rpc" })), undefined);
+		assert.equal(await bash("make f", ctx({ mode: "rpc" })), undefined);
 	});
 
 	it("protects the state file", async () => {
-		writeConfig({ default: "allow", tools: { "*": "allow" } });
+		writeConfig({ paths: { "/**": "yes-i-am-very-sure" }, tools: { "*": "yes-i-am-very-sure" } });
 		assert.ok(blocked(await call("write", { path: stateFile, content: "{}" }, ctx({ key: "n" }))));
 	});
 });
@@ -246,7 +269,7 @@ describe("tool calls", () => {
 describe("prompt position", () => {
 	it("replaces the editor by default (no overlay)", async () => {
 		let options: CustomOptions | undefined | "unset" = "unset";
-		await bash("echo g", ctx({ key: "y", onCustom: (o) => (options = o) }));
+		await bash("make g", ctx({ key: "y", onCustom: (o) => (options = o) }));
 		assert.equal(options, undefined);
 	});
 
@@ -254,7 +277,7 @@ describe("prompt position", () => {
 		for (const position of ["center", "top"]) {
 			writeConfig({ ui: { position } });
 			let options: CustomOptions | undefined;
-			await bash(`echo ${position}`, ctx({ key: "y", onCustom: (o) => (options = o) }));
+			await bash(`make ${position}`, ctx({ key: "y", onCustom: (o) => (options = o) }));
 			assert.equal(options?.overlay, true, position);
 		}
 	});
@@ -265,7 +288,7 @@ describe("/permissions off | on", () => {
 		await run("off");
 		assert.ok(JSON.parse(fs.readFileSync(stateFile, "utf8")).disabled[project]);
 		assert.equal(await bash("sudo ls", ctx({ key: "n" })), undefined);
-		assert.equal(await bash("echo x", ctx({ key: "n" })), undefined);
+		assert.equal(await bash("make x", ctx({ key: "n" })), undefined);
 		assert.match(status.get("permissions") ?? "", /permissions off$/);
 	});
 
@@ -317,7 +340,7 @@ describe("/permissions off | on", () => {
 		const text = component.render(80).join("\n");
 		assert.match(text, /pi-permissions/);
 		assert.match(text, /off \(this session\)/);
-		assert.match(text, /git status \*\s+allow/);
+		assert.match(text, /git status \*\s+yes-i-am-very-sure/);
 	});
 
 	it("completes subcommands", () => {

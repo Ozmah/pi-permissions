@@ -1,25 +1,23 @@
 {
-  "default": "ask",
-  "tools": {
-    "read": "allow",
-    "ls": "allow",
-    "find": "allow",
-    "grep": "allow",
-    "edit": "ask",
-    "write": "ask"
+  "commands": {
+    "sudo *": "halt",
+    "rm -rf /*": "halt",
+    "git push --force *": "deny",
+    "git add *": "ask",
+    "git commit *": "ask",
+    "git push *": "ask",
+    "git status *": "yes-i-am-very-sure",
+    "git log *": "yes-i-am-very-sure",
+    "git diff *": "yes-i-am-very-sure"
   },
-  "external_directory": {
-    "~/projects/*": "allow",
-    "*": "ask"
+  "paths": {
+    "~/.ssh/**": "deny",
+    "~/.aws/**": "deny",
+    "~/.gnupg/**": "deny",
+    "**/.env": "ask"
   },
-  "readonly_commands": "allow",
-  "bash": {
-    "git status *": "allow",
-    "git log *": "allow",
-    "git diff *": "allow",
-    "sudo *": "deny",
-    "*": "ask"
-  },
+  "tools": {},
+  "readonly": true,
   "ui": {
     "position": "editor"
   }

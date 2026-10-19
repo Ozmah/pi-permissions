@@ -53,7 +53,12 @@ const STATUS_KEY = "permissions";
 
 /** Separate from STATUS_KEY: "stfu" grants and "off" can show at the same time. */
 const STFU_STATUS_KEY = "permissions-stfu";
+
 const UNINSPECTABLE = "pi-permissions could not inspect this tool call: its input is not JSON.";
+
+const HALTED_REASON =
+	"Halted: the user's permission config sets this to halt, and the user has been alerted. Do not retry it or work around it.";
+
 const DENIED_REASON = "The user denied this action. Do not retry it; ask the user how to proceed.";
 
 const approvedMessage = (text: string) => `The user approved this tool call and added a message:\n${text}`;
@@ -226,6 +231,17 @@ export default function (pi: ExtensionAPI) {
 		// Only what was not allowed: the agent needs to know which part was refused, not what passed.
 		const why = d.reasons.filter(needsDecision).map(formatReason).join("\n");
 
+		if (d.action === "halt") {
+			// A deny the user wants to hear about: something tried what the config says must never run.
+			if (ctx.hasUI)
+				ctx.ui.notify(
+					sanitize(`🛑 Halted: ${event.toolName} tried something set to halt in your permissions config\n${why}`),
+					"error",
+				);
+
+			return { block: true, reason: `${HALTED_REASON}\n${why}` };
+		}
+
 		if (d.action === "deny") {
 			if (ctx.hasUI) ctx.ui.notify(sanitize(`⛔ Blocked: ${event.toolName}\n${why}`), "warning");
 
@@ -237,7 +253,7 @@ export default function (pi: ExtensionAPI) {
 			input,
 			absPath: d.absPath,
 			dirs: d.workingDirs,
-			protected: d.protected,
+			firm: d.firm,
 		};
 
 		if (sessionGrants.some((g) => grantMatches(g, target))) return undefined;
@@ -309,12 +325,11 @@ export default function (pi: ExtensionAPI) {
 			dir,
 			off,
 			files,
-			default: cfg.default,
 			position: cfg.ui.position,
+			commands: cfg.commands,
+			paths: cfg.paths,
 			tools: cfg.tools,
-			external_directory: cfg.external_directory,
-			bash: cfg.bash,
-			readonly_commands: cfg.readonly_commands,
+			readonly: cfg.readonly,
 			grants: sessionGrants.map(describeGrant),
 			disabled,
 			errors: [...errors, ...configErrors],

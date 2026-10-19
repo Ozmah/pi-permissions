@@ -1,13 +1,24 @@
 /**
  * Configuration loading, validation and merging.
+ *
+ * The config is about what must not happen: rules `halt`, `deny` or `ask`.
+ * Anything without a rule asks, and "stfu pi" grants can silence that for a
+ * folder. Allowing without asking takes a deliberate `yes-i-am-very-sure`.
  */
 import * as fs from "node:fs";
 
-export type Action = "allow" | "ask" | "deny";
+/** What a rule does, as written in the config, from loosest to strictest. */
+export type Rule = "yes-i-am-very-sure" | "ask" | "deny" | "halt";
+
+/** The outcome of a decision: `halt` is a `deny` that also alerts the user. */
+export type Verdict = "allow" | "ask" | "deny" | "halt";
+
+/** The phrase that allows without asking. Long and odd on purpose: it cannot be typed by accident. */
+export const VERY_SURE = "yes-i-am-very-sure";
 
 /** Rules by pattern, in file order. Keys come from the config file. */
 export interface RuleMap {
-	[pattern: string]: Action;
+	[pattern: string]: Rule;
 }
 
 /**
@@ -19,16 +30,14 @@ export interface RuleMap {
 export type PromptPosition = "editor" | "center" | "top";
 
 export interface PermissionConfig {
-	default: Action;
+	/** Bash command segments, e.g. `"sudo *": "halt"`. */
+	commands: RuleMap;
+	/** Paths read or written by any tool, e.g. `"~/.ssh/**": "deny"`. */
+	paths: RuleMap;
+	/** Tools by name, e.g. `"webfetch": "deny"`. */
 	tools: RuleMap;
-	external_directory: RuleMap;
-	bash: RuleMap;
-	/**
-	 * Action for bash segments recognized as read-only commands (`cat`, `grep`,
-	 * `head`, `cd`...) whose paths are inside the project or allowed by
-	 * `external_directory`. Unset: off. Only loosens the `"*"` fallback or the default.
-	 */
-	readonly_commands?: Action;
+	/** Reading inside the project (file tools and read-only bash commands) runs without asking. */
+	readonly: boolean;
 	ui: { position: PromptPosition };
 }
 
@@ -41,11 +50,19 @@ export interface JsonObject {
 	[key: string]: Json;
 }
 
-const ACTIONS: ReadonlySet<string> = new Set<Action>(["allow", "ask", "deny"]);
+const RULES: ReadonlySet<string> = new Set<Rule>([VERY_SURE, "ask", "deny", "halt"]);
 const POSITIONS: ReadonlySet<string> = new Set<PromptPosition>(["editor", "center", "top"]);
 
-export function isAction(value: unknown): value is Action {
-	return typeof value === "string" && ACTIONS.has(value);
+/** Keys of the pre-0.4 format, reported so an old config is not silently ignored. */
+const LEGACY_KEYS = ["default", "external_directory", "bash", "readonly_commands"];
+
+export function isRule(value: unknown): value is Rule {
+	return typeof value === "string" && RULES.has(value);
+}
+
+/** The verdict a rule produces. */
+export function ruleVerdict(rule: Rule): Verdict {
+	return rule === VERY_SURE ? "allow" : rule;
 }
 
 function isPosition(value: unknown): value is PromptPosition {
@@ -81,7 +98,13 @@ export function isJsonObject(value: Json | undefined): value is JsonObject {
 }
 
 export function defaultConfig(): PermissionConfig {
-	return { default: "ask", tools: {}, external_directory: {}, bash: {}, ui: { position: "editor" } };
+	return { commands: {}, paths: {}, tools: {}, readonly: true, ui: { position: "editor" } };
+}
+
+function invalidRule(value: Json): string {
+	if (value === "allow") return `"allow" is not accepted; to allow without asking, write "${VERY_SURE}"`;
+
+	return `invalid value ${JSON.stringify(value)} (use halt/deny/ask/${VERY_SURE})`;
 }
 
 function parseRules(raw: Json | undefined, where: string, errors: string[]): RuleMap {
@@ -96,8 +119,8 @@ function parseRules(raw: Json | undefined, where: string, errors: string[]): Rul
 	}
 
 	for (const [pattern, value] of Object.entries(raw)) {
-		if (isAction(value)) out[pattern] = value;
-		else errors.push(`${where}.${pattern}: invalid value ${JSON.stringify(value)} (use allow/ask/deny)`);
+		if (isRule(value)) out[pattern] = value;
+		else errors.push(`${where}.${pattern}: ${invalidRule(value)}`);
 	}
 
 	return out;
@@ -111,22 +134,22 @@ export function parseConfig(raw: Json, source: string, errors: string[]): Partia
 		return {};
 	}
 
-	const cfg: PartialConfig = {
-		tools: parseRules(raw.tools, `${source}: tools`, errors),
-		external_directory: parseRules(raw.external_directory, `${source}: external_directory`, errors),
-		bash: parseRules(raw.bash, `${source}: bash`, errors),
-	};
+	const legacy = LEGACY_KEYS.filter((k) => raw[k] !== undefined);
 
-	if (raw.default !== undefined) {
-		if (isAction(raw.default)) cfg.default = raw.default;
-		else errors.push(`${source}: invalid default ${JSON.stringify(raw.default)}`);
+	if (legacy.length) {
+		const keys = legacy.join(", ");
+		errors.push(`${source}: ${keys}: old format, ignored. Rules are now "commands", "paths" and "tools" (see README)`);
 	}
 
-	if (raw.readonly_commands !== undefined) {
-		const ro = raw.readonly_commands;
+	const cfg: PartialConfig = {
+		commands: parseRules(raw.commands, `${source}: commands`, errors),
+		paths: parseRules(raw.paths, `${source}: paths`, errors),
+		tools: parseRules(raw.tools, `${source}: tools`, errors),
+	};
 
-		if (isAction(ro)) cfg.readonly_commands = ro;
-		else errors.push(`${source}: invalid readonly_commands ${JSON.stringify(ro)} (use allow/ask/deny)`);
+	if (raw.readonly !== undefined) {
+		if (raw.readonly === true || raw.readonly === false) cfg.readonly = raw.readonly;
+		else errors.push(`${source}: readonly must be true or false`);
 	}
 
 	if (raw.ui !== undefined) {
@@ -158,12 +181,11 @@ export function mergeConfigs(...layers: (PartialConfig | undefined)[]): Permissi
 	for (const c of layers) {
 		if (!c) continue;
 
-		if (c.default) out.default = c.default;
-
-		if (c.readonly_commands) out.readonly_commands = c.readonly_commands;
+		Object.assign(out.commands, c.commands);
+		Object.assign(out.paths, c.paths);
 		Object.assign(out.tools, c.tools);
-		Object.assign(out.external_directory, c.external_directory);
-		Object.assign(out.bash, c.bash);
+
+		if (c.readonly !== undefined) out.readonly = c.readonly;
 
 		if (c.ui?.position) out.ui.position = c.ui.position;
 	}

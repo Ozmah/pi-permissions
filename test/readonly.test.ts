@@ -12,10 +12,8 @@ const home = os.homedir();
 const cwd = resolvePath(path.join(os.tmpdir(), "pi-permissions-test-project"), "/");
 
 const cfg = mergeConfigs({
-	default: "ask",
-	readonly_commands: "allow",
-	external_directory: { "~/work/*": "allow", "*": "ask" },
-	bash: { "git log *": "allow", "sudo *": "deny", "cat *secret*": "deny", "*": "ask" },
+	commands: { "git log *": "yes-i-am-very-sure", "sudo *": "deny", "cat *secret*": "deny" },
+	paths: { "~/work/**": "yes-i-am-very-sure" },
 });
 
 const bash = (command: string, cdpath?: string) => decide(cfg, "bash", { command }, { cwd, cdpath });
@@ -169,7 +167,7 @@ describe("decide: read-only commands", () => {
 		assert.equal(action(command), "allow");
 	});
 
-	it("allows reads in directories external_directory allows", () => {
+	it("allows reads in directories a path rule allows", () => {
 		assert.equal(action("cat ~/work/notes.md"), "allow");
 		assert.equal(action("cd ~/work/x && grep -rn todo ."), "allow");
 	});
@@ -212,19 +210,19 @@ describe("decide: read-only commands", () => {
 		}
 	});
 
-	it("never overrides explicit rules", () => {
+	it("lets command rules decide", () => {
 		assert.equal(action("cat my-secret.txt"), "deny");
 		assert.equal(action("sudo cat x"), "deny");
 	});
 
-	it("does nothing when readonly_commands is unset", () => {
-		const off = mergeConfigs({ bash: { "*": "ask" } });
-		assert.equal(decide(off, "bash", { command: "cat x" }, { cwd }).action, "ask");
+	it("keeps path rules on reads a command rule allows", () => {
+		const both = mergeConfigs({ commands: { "cat *": "yes-i-am-very-sure" }, paths: { "~/.ssh/**": "deny" } });
+		assert.equal(decide(both, "bash", { command: "cat ~/.ssh/id_rsa" }, { cwd }).action, "deny");
 	});
 
-	it("only loosens: a stricter readonly_commands keeps a looser fallback", () => {
-		const loose = mergeConfigs({ readonly_commands: "ask", bash: { "*": "allow" } });
-		assert.equal(decide(loose, "bash", { command: "cat /etc/passwd" }, { cwd }).action, "allow");
+	it("asks for every read when readonly is off", () => {
+		const off = mergeConfigs({ readonly: false });
+		assert.equal(decide(off, "bash", { command: "cat x" }, { cwd }).action, "ask");
 	});
 
 	it("shows both paths when a read goes through a symlink", () => {
@@ -232,10 +230,7 @@ describe("decide: read-only commands", () => {
 		fs.writeFileSync(path.join(dir, "target"), "x");
 		fs.symlinkSync(path.join(dir, "target"), path.join(dir, "link"));
 		const [, reason] = bash(`cat ${dir}/link`).reasons.map(formatReason);
-		assert.equal(
-			reason,
-			`${dir}/target (symlink from ${dir}/link) → no matching external_directory rule (fallback "*": ask)`,
-		);
+		assert.equal(reason, `${dir}/target (symlink from ${dir}/link) → outside the project, no rule: ask`);
 	});
 
 	it("reduces an agent's cd + script + grep command to the one decision that matters", () => {
@@ -251,9 +246,7 @@ describe("decide: read-only commands", () => {
 
 		const d = bash(command);
 		assert.equal(d.action, "ask");
-		assert.deepEqual(d.reasons.filter(needsDecision).map(formatReason), [
-			`"python3 - <<'EOF'" → no matching bash rule (fallback "*": ask)`,
-		]);
+		assert.deepEqual(d.reasons.filter(needsDecision).map(formatReason), [`"python3 - <<'EOF'" → no rule: ask`]);
 		assert.equal(d.reasons.filter((r) => !needsDecision(r)).length, 3, "cd, grep and head are allowed");
 	});
 
@@ -287,12 +280,12 @@ describe("decide: read-only commands", () => {
 		assert.deepEqual(bash("cat x").reasons.map(formatReason), [`"cat x" → read-only command: allow`]);
 
 		assert.deepEqual(bash("cat ~/.ssh/id_rsa").reasons.map(formatReason), [
-			`"cat ~/.ssh/id_rsa" → read-only command: allow`,
-			`${home}/.ssh/id_rsa → no matching external_directory rule (fallback "*": ask)`,
+			`"cat ~/.ssh/id_rsa" → read-only command: ask`,
+			`${home}/.ssh/id_rsa → outside the project, no rule: ask`,
 		]);
 
 		assert.deepEqual(bash("rg --pre sh x").reasons.map(formatReason), [
-			`"rg --pre sh x" → no matching bash rule (fallback "*": ask)`,
+			`"rg --pre sh x" → no rule: ask`,
 			`"rg --pre sh x" → not read-only: --pre is not read-only`,
 		]);
 	});

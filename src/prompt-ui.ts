@@ -51,10 +51,20 @@ export interface InputSpec {
 export type PromptTheme = Pick<Theme, "fg" | "bg" | "bold">;
 
 /** Theme color for each action, shared by the prompt and the summary card. */
-export const ACTION_COLOR = { allow: "success", ask: "warning", deny: "error" } as const satisfies Record<
-	string,
-	ThemeColor
->;
+export const ACTION_COLOR = {
+	allow: "success",
+	ask: "warning",
+	deny: "error",
+	halt: "error",
+} as const satisfies Record<string, ThemeColor>;
+
+/** Theme color for each rule value as written in the config. The allow phrase is a warning: it is the dangerous one. */
+export const RULE_COLOR = {
+	"yes-i-am-very-sure": "warning",
+	ask: "accent",
+	deny: "error",
+	halt: "error",
+} as const satisfies Record<string, ThemeColor>;
 
 /** A run of text with its own color. Text is sanitized when rendered. */
 export interface Span {

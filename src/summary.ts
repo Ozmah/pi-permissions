@@ -4,8 +4,8 @@
 import * as os from "node:os";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import type { Action, RuleMap } from "./config.ts";
-import { ACTION_COLOR } from "./prompt-ui.ts";
+import type { Rule, RuleMap } from "./config.ts";
+import { RULE_COLOR } from "./prompt-ui.ts";
 import { sanitize } from "./text.ts";
 
 export const SUMMARY_ENTRY = "pi-permissions-summary";
@@ -13,7 +13,7 @@ export const SUMMARY_ENTRY = "pi-permissions-summary";
 /** `/permissions` subcommands: one list for the card and for argument completion. */
 export const COMMANDS: readonly { args: string; description: string }[] = [
 	{ args: "", description: "Show this summary" },
-	{ args: "reset", description: "Clear 'always this session' grants" },
+	{ args: "reset", description: "Clear session grants (stfu pi)" },
 	{ args: "off", description: "Disable for this project (persistent)" },
 	{ args: "off --session", description: "Disable for this project until the session ends" },
 	{ args: "on", description: "Enable for this project" },
@@ -24,13 +24,12 @@ export interface Summary {
 	dir: string;
 	off?: "session" | "persistent";
 	files: string[];
-	default: Action;
 	position: string;
+	commands: RuleMap;
+	paths: RuleMap;
 	tools: RuleMap;
-	external_directory: RuleMap;
-	bash: RuleMap;
-	/** Unset: read-only command detection is off. */
-	readonly_commands?: Action;
+	/** Reading inside the project runs without asking. */
+	readonly: boolean;
 	grants: string[];
 	disabled: string[];
 	errors: string[];
@@ -55,7 +54,7 @@ function pad(text: string, width: number): string {
 export function renderSummary(s: Summary, t: SummaryTheme): string[] {
 	const label = (text: string) => t.fg("muted", pad(text, LABEL_WIDTH));
 	const none = t.fg("dim", "none");
-	const action = (a: Action) => t.fg(ACTION_COLOR[a], a);
+	const rule = (r: Rule) => t.fg(RULE_COLOR[r], r);
 	const heading = (text: string) => t.bold(t.fg("accent", text));
 
 	const status = s.off
@@ -69,12 +68,14 @@ export function renderSummary(s: Summary, t: SummaryTheme): string[] {
 	}
 
 	const files = s.files.length ? s.files.map(display) : [];
-	lines.push(`${label("Config")}${files[0] ?? t.fg("warning", "none, everything asks")}`);
+	lines.push(`${label("Config")}${files[0] ?? t.fg("warning", "none, defaults apply")}`);
 
 	for (const f of files.slice(1)) lines.push(`${" ".repeat(LABEL_WIDTH)}${f}`);
-	lines.push(`${label("Default")}${action(s.default)}`);
 	lines.push(`${label("Prompt")}${s.position}`);
-	lines.push(`${label("Read-only")}${s.readonly_commands ? action(s.readonly_commands) : t.fg("dim", "off")}`);
+	lines.push(
+		`${label("Read-only")}${s.readonly ? t.fg("success", "on, reading inside the project runs") : t.fg("dim", "off")}`,
+	);
+	lines.push(`${label("No rule")}${t.fg("warning", "asks")}`);
 
 	const section = (title: string, rules: RuleMap) => {
 		lines.push("", heading(title));
@@ -88,12 +89,12 @@ export function renderSummary(s: Summary, t: SummaryTheme): string[] {
 
 		const width = Math.max(...entries.map(([p]) => visibleWidth(display(p)))) + 2;
 
-		for (const [pattern, a] of entries) lines.push(`  ${pad(display(pattern), width)}${action(a)}`);
+		for (const [pattern, r] of entries) lines.push(`  ${pad(display(pattern), width)}${rule(r)}`);
 	};
 
-	section("Tools", s.tools);
-	section("External directories", s.external_directory);
-	section("Bash", s.bash);
+	section("Command rules", s.commands);
+	section("Path rules", s.paths);
+	section("Tool rules", s.tools);
 
 	const list = (title: string, items: string[]) => {
 		lines.push("", heading(title));

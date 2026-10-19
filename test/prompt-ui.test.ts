@@ -394,7 +394,7 @@ describe("buildBody", () => {
 	it("lists what needs a decision, then folds what is allowed into one line", () => {
 		const reasons: Reason[] = [
 			{ kind: "readonly", subject: '"cd x"', action: "allow" },
-			{ kind: "fallback", subject: '"python3 -"', section: "bash", action: "ask" },
+			{ kind: "default", subject: '"python3 -"', action: "ask" },
 			{ kind: "readonly", subject: '"grep a b"', action: "allow" },
 		];
 
@@ -419,10 +419,19 @@ describe("buildBody", () => {
 
 describe("reasonSpans", () => {
 	const reasons: Reason[] = [
-		{ kind: "match", subject: '"git status"', section: "bash", pattern: "git status *", action: "allow" },
-		{ kind: "fallback", subject: '"ls -la"', section: "bash", action: "ask" },
-		{ kind: "default", subject: "mcp__x", section: "tools", action: "deny" },
+		{
+			kind: "rule",
+			subject: '"git status"',
+			section: "commands",
+			pattern: "git status *",
+			rule: "yes-i-am-very-sure",
+			action: "allow",
+		},
+		{ kind: "default", subject: '"ls -la"', action: "ask" },
+		{ kind: "rule", subject: '"sudo x"', section: "commands", pattern: "sudo *", rule: "halt", action: "halt" },
 		{ kind: "note", subject: "contains redirection to file", action: "ask" },
+		{ kind: "outside", subject: "/etc/hosts", action: "ask" },
+		{ kind: "inside", subject: "/p/a.ts", action: "allow" },
 	];
 
 	it("joins to exactly the plain text the model receives", () => {
@@ -435,23 +444,17 @@ describe("reasonSpans", () => {
 			);
 	});
 
-	it("colors the action by meaning and highlights the pattern", () => {
+	it("colors the rule by meaning and highlights the pattern", () => {
 		const color = (r: Reason, text: string) => reasonSpans(r).find((s) => s.text === text)?.color;
-		assert.equal(color(reasons[0], "allow"), "success");
+		assert.equal(color(reasons[0], "yes-i-am-very-sure"), "warning");
 		assert.equal(color(reasons[0], '"git status *"'), "accent");
 		assert.equal(color(reasons[1], "ask"), "warning");
-		assert.equal(color(reasons[1], '"*"'), "accent");
-		assert.equal(color(reasons[2], "deny"), "error");
+		assert.equal(color(reasons[2], "halt"), "error");
 		assert.equal(color(reasons[3], "contains redirection to file"), "warning");
 	});
 
 	it("renders colored reasons within the width and sanitizes them", () => {
-		const evil: Reason = {
-			kind: "fallback",
-			subject: `"echo \x1b[2J ${"x".repeat(80)}"`,
-			section: "bash",
-			action: "ask",
-		};
+		const evil: Reason = { kind: "default", subject: `"echo \x1b[2J ${"x".repeat(80)}"`, action: "ask" };
 
 		const colorTheme: PromptTheme = { fg: (_c, t) => `\x1b[33m${t}\x1b[0m`, bg: (_c, t) => t, bold: (t) => t };
 		const body = buildBody("bash", { command: "ls" }, undefined, [evil]);

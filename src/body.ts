@@ -3,7 +3,7 @@
  */
 import { type Json, type JsonObject, isJsonObject, isNumber, isString } from "./config.ts";
 import { formatReason, needsDecision, type Reason } from "./policy.ts";
-import { ACTION_COLOR, type BodyLine, type Span } from "./prompt-ui.ts";
+import { ACTION_COLOR, type BodyLine, RULE_COLOR, type Span } from "./prompt-ui.ts";
 import { inlineScript } from "./scripts.ts";
 import { displayLines, parseShell } from "./shell.ts";
 import { onlySgr, sanitize } from "./text.ts";
@@ -173,25 +173,20 @@ export function reasonSpans(r: Reason): Span[] {
 	switch (r.kind) {
 		case "readonly":
 			return [...head, muted("read-only command: "), action];
-		case "match":
+		case "rule":
 			return [
 				...head,
-				muted(`matched ${r.section} `),
+				muted(`${r.section} `),
 				{ text: `"${r.pattern}"`, color: "accent" },
 				muted(": "),
-				action,
-			];
-		case "fallback":
-			return [
-				...head,
-				muted(`no matching ${r.section} rule (fallback `),
-				{ text: '"*"', color: "accent" },
-				muted(": "),
-				action,
-				muted(")"),
+				{ text: r.rule, color: RULE_COLOR[r.rule] },
 			];
 		case "default":
-			return [...head, muted(`no matching ${r.section} rule (default: `), action, muted(")")];
+			return [...head, muted("no rule: "), action];
+		case "outside":
+			return [...head, muted("outside the project, no rule: "), action];
+		case "inside":
+			return [...head, muted("read inside the project: "), action];
 		case "note":
 			return [...head, { text: "requires confirmation", color: ACTION_COLOR.ask }];
 	}

@@ -24,48 +24,82 @@ Run `/permissions` to see the active rules, session grants and available command
 
 ## Configuration
 
+Rules list what must not happen. Anything without a rule asks, and a "stfu pi" grant silences those questions for a folder until the session ends.
+
 ```json
 {
-  "default": "ask",
-  "tools": { "read": "allow", "edit": "ask", "write": "ask" },
-  "external_directory": { "~/projects/*": "allow", "*": "ask" },
-  "bash": { "git status *": "allow", "sudo *": "deny", "*": "ask" },
+  "commands": {
+    "sudo *": "halt",
+    "git push --force *": "deny",
+    "git add *": "ask",
+    "git commit *": "ask",
+    "git push *": "ask",
+    "bun test *": "yes-i-am-very-sure"
+  },
+  "paths": {
+    "~/.ssh/**": "deny",
+    "**/.env": "ask",
+    "~/dev/**": "yes-i-am-very-sure"
+  },
+  "tools": { "webfetch": "deny" },
+  "readonly": true,
   "ui": { "position": "editor" }
 }
 ```
 
-| Key                  | Applies to                                                                             |
-| -------------------- | -------------------------------------------------------------------------------------- |
-| `default`            | Anything no rule matches. Default `ask`.                                               |
-| `tools`              | Tools by name: `read`, `write`, `edit`, `ls`, `find`, `grep`, MCP and extension tools. |
-| `external_directory` | Paths outside the working directory. Unmatched paths ask.                              |
-| `bash`               | Each segment of a bash command.                                                        |
-| `readonly_commands`  | Bash segments that only read, see below. Unset: off.                                   |
-| `ui.position`        | `editor` (replaces the input), `center` or `top`.                                      |
+| Key           | Applies to                                                                                                |
+| ------------- | --------------------------------------------------------------------------------------------------------- |
+| `commands`    | Each segment of a bash command.                                                                           |
+| `paths`       | Paths that any tool reads or writes: file tools, and the files read-only bash commands read.              |
+| `tools`       | Tools by name: `read`, `write`, `edit`, `ls`, `find`, `grep`, MCP and extension tools.                    |
+| `readonly`    | Reads inside the project run without asking, with file tools and read-only bash commands. Default `true`. |
+| `ui.position` | `editor` (replaces the input), `center` or `top`.                                                         |
 
-Values: `allow`, `ask`, `deny`.
+| Value                | Effect                                                                          | Skipped by stfu |
+| -------------------- | ------------------------------------------------------------------------------- | --------------- |
+| `halt`               | Blocks the call, alerts you, and tells the agent the config forbids it.         | No              |
+| `deny`               | Blocks the call.                                                                | No              |
+| `ask`                | Asks every time.                                                                | No              |
+| `yes-i-am-very-sure` | Runs without asking. The value is long and odd so nobody writes it by accident. | n/a             |
+| (no rule)            | Asks. Reads inside the project run when `readonly` is on.                       | Yes             |
+
+`"allow"` is rejected with an error that points to `"yes-i-am-very-sure"`. A config that still uses the keys from before 0.4 (`default`, `external_directory`, `bash`, `readonly_commands`) gets an error, and those keys are ignored.
 
 `~/.pi/agent/permissions.json` is global. `<project>/.pi/permissions.json` applies to that project, only if it is trusted, and overrides the global file key by key. Both are read on every call; no `/reload` needed.
 
-**Patterns.** `*` matches anything, including `/` and spaces; `?` one character. A trailing ` *` or `/*` also matches the bare prefix (`git status *` matches `git status`). `~/` is the home directory.
+### Patterns
 
-**Precedence.** The most specific pattern wins; on a tie, the strictest action. File tools take the strictest of their `tools` and `external_directory` rules.
+`*` matches anything, including `/` and spaces, and `**` means the same. `?` matches one character. A trailing ` *`, `/*` or `/**` also matches the bare prefix: `git status *` matches `git status`, and `~/.ssh/**` matches `~/.ssh`. `~/` is the home directory. Path rules are checked against the real path and the requested one, so a symlink cannot get around either.
 
-**Bash.** Commands are split on `&&`, `||`, `|`, `;`, `&` and newlines, outside quotes, and every segment is checked. Command substitution, process substitution, redirection to a file and unclosed quotes always ask. Here-document bodies (`<<EOF`, `<<'EOF'`, `<<-EOF`) are data for their command, not segments: the prompt shows them as a block under it. A substitution in an unquoted here-document asks, and so does a missing delimiter.
+### Precedence
 
-Inline scripts (`python3 - <<'EOF'`, `python3 -c`, `node -e`, `bash -c`, `ruby -e`, `perl -e`, `php -r`) are labeled and highlighted in their language. They are arbitrary code: they always go through the bash rules, and their content is shown, never interpreted.
+Every matching rule counts and the strictest one wins: `halt`, then `deny`, `ask` and `yes-i-am-very-sure`. With `"git *": "yes-i-am-very-sure"` and `"git push *": "ask"`, `git push` asks.
+
+### Safety net
+
+A `halt`, `deny` or `ask` command can show up somewhere other than the start of a segment: `$(sudo …)`, `bash -c "sudo …"`, `env sudo`, `/usr/bin/sudo`, or a line inside a script. When it does, the call asks and stfu does not skip it. The same applies to a strict path written in a command, such as `~/.ssh`, `$HOME/.ssh` or `.env`. These cases ask instead of blocking because the text may only mention the command, as in `grep sudo log`. Rules whose wildcard filters the arguments, like `cat *secret*`, are left out.
+
+### Bash
+
+Commands are split on `&&`, `||`, `|`, `;`, `&` and newlines, outside quotes, and every segment is checked. Command substitution, process substitution, redirection to a file and unclosed quotes always ask. A here-document body (`<<EOF`, `<<'EOF'`, `<<-EOF`) belongs to the command that opens it, and the prompt shows it as a block under that command. A substitution inside an unquoted here-document asks, and so does a missing delimiter.
+
+Inline scripts (`python3 - <<'EOF'`, `python3 -c`, `node -e`, `bash -c`, `ruby -e`, `perl -e`, `php -r`) get a label and highlighting in their language. They are arbitrary code, so they always go through the command rules; the extension shows them and makes no attempt to interpret them.
 
 The prompt lists first what needs a decision, then folds what is already allowed into one line.
 
-**Read-only commands.** With `"readonly_commands": "allow"`, a segment that only reads gets that action when every path it reads is inside the project or allowed by `external_directory`, so `cd apps/server && grep -n foo src/*.ts | head -20` runs without asking. Explicit `bash` rules still win; it only replaces the `"*"` fallback or the default, and never makes them stricter.
+### Read-only commands
+
+With `readonly` on, a segment that only reads runs when every path it reads is inside the project or allowed by a path rule, so `cd apps/server && grep -n foo src/*.ts | head -20` runs without asking. Command rules still decide when they match, and path rules apply to what those commands read.
 
 - Commands: `cat`, `head`, `tail`, `wc`, `ls`, `cut`, `grep`, `egrep`, `fgrep`, `rg`, `find`, `sort`, `uniq`, `echo`, `pwd`, `cd`.
-- Flags that write, run programs or follow symlinks disqualify the segment: `find -exec/-delete/-fprint/-L`, `rg --pre/-L`, `grep -R`, `sort -o`, `tail -f`, `uniq in out`. So do output redirections other than `/dev/null` or an fd, and here-documents.
-- Every operand is checked as a path, patterns included. `grep "/api" src` asks for `/api` when it is outside the project: a wrong guess adds a prompt, never skips one. Input redirections (`< file`) are checked too.
+- Flags that write, run programs or follow symlinks disqualify the segment: `find -exec/-delete/-fprint/-L`, `rg --pre/-L`, `grep -R`, `sort -o`, `tail -f`, `uniq in out`. Output redirections other than `/dev/null` or an fd disqualify it too.
+- Every operand is checked as a path, patterns included. `grep "/api" src` asks for `/api` when it is outside the project. A wrong guess can only add a prompt. Input redirections (`< file`) are checked too, and a here-document or here-string feeding a read-only command is plain input.
 - `cd` is followed: later relative paths are checked against every directory the command may be in. `cd -`, `cd $VAR`, `pushd`, `builtin`, `eval`, assignments, and `cd name` with `$CDPATH` set lose track, and later relative paths ask.
-- Variables, `~user`, subshells, brace expansion and comments are not resolved: the segment asks. A glob is checked by its fixed directory (`src/*.ts` → `src`); `..` after a wildcard asks.
+- Variables, `~user`, subshells, brace expansion and comments are not resolved, so the segment asks. A glob is checked by its fixed directory (`src/*.ts` → `src`), and `..` after a wildcard asks.
 
-**Protected files.** Writing the permission files or the extension's own files always asks, whatever the rules. A bash command that mentions them asks too, unless every segment is a read-only command.
+### Protected files
+
+Writing the permission files or the extension's own files always asks, whatever the rules, and no grant covers it. A bash command that mentions them asks too, unless every segment is a read-only command.
 
 ## Prompt
 
@@ -82,11 +116,13 @@ The prompt lists first what needs a decision, then folds what is already allowed
 | `Shift+↑` `Shift+↓`                       | Scroll, in any layout. In fullscreen Pi keeps `PgUp` `PgDn` for the transcript |
 | `Esc`                                     | No                                                                             |
 
-**stfu pi on a folder.** `a` ("stfu pi on <folder>/") gives every tool, bash included, total access to the folder the call works in, for the rest of the session; `d` ("…and subfolders") extends it to its subfolders. For file tools the folder is the file's; for bash, the folder the command runs in, following its `cd`s (no option is offered when that cannot be known). Tools without a path get `a`: any input.
+### stfu pi on a folder
+
+`a` ("stfu pi on <folder>/") gives every tool, bash included, total access to the folder the call works in until the session ends. `d` ("…and subfolders") covers its subfolders too. For file tools the folder is the file's. For bash it is the folder the command runs in, following its `cd`s, and no option is offered when that folder cannot be known. Tools without a path get `a` for any input.
 
 Why folders and not commands: agents today send endless one-liners, chaining `cd`, pipes and inline scripts to do something complex in a single command (blame Opus 5.5 and Sol 6.1). An exact command never comes back twice, so "always this command" was useless. Trusting a folder is the decision that actually holds, for now at least.
 
-Total access means it: in bash, any command that runs in the folder is allowed, whatever paths it touches. The status bar shows `🤫 stfu pi on <folder>/` while a grant is active (`/**` with subfolders), so it is never forgotten; `/permissions reset` clears it. Grants live in memory and end with the session. They never cover protected files, and `deny` rules still apply.
+In bash, total access allows any command that runs in the folder, whatever paths it touches. While a grant is active the status bar shows `🤫 stfu pi on <folder>/` (`/**` with subfolders), and `/permissions reset` clears it. Grants live in memory and end with the session. They never cover protected files or `halt`, `deny` and `ask` rules.
 
 ## Turning it off
 
@@ -95,8 +131,9 @@ Total access means it: in bash, any command that runs in the folder is allowed, 
 ## Limitations
 
 - It is not a sandbox. It decides whether a call runs, not what the call can reach.
-- Bash can touch paths that cannot be detected from the command text. Keep `"*": "ask"` in `bash`.
-- A trailing `*` allows any argument, and some read-only commands can write through options (`git log --output=<file>`).
+- A list of what must not happen is never complete. It works because anything without a rule asks: `halt` and `deny` catch what you listed, and everything else still reaches you.
+- Bash can touch paths that cannot be detected from the command text, and the safety net only finds what is written plainly. A script can build `sudo` out of pieces.
+- A trailing `*` allows any argument, and some commands write through options (`git log --output=<file>`). Keep that in mind when you use `yes-i-am-very-sure`.
 - The bash scanner is not a full shell parser. When unsure, it asks.
 - Read-only commands: a glob that matches a symlink inside the project can read where the symlink points.
 - While disabled, the agent can write any file, including the permission files.

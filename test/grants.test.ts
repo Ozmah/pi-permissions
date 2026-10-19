@@ -15,18 +15,18 @@ const shot = (name: string) => path.join(clipboard, name);
 
 const read = (absPath: string): CallTarget => ({ tool: "read", input: { path: absPath }, absPath });
 
-const edit = (absPath: string, isProtected = false): CallTarget => ({
+const edit = (absPath: string, firm = false): CallTarget => ({
 	tool: "edit",
 	input: { path: absPath },
 	absPath,
-	protected: isProtected,
+	firm,
 });
 
-const bash = (dirs: string[] | undefined, isProtected = false): CallTarget => ({
+const bash = (dirs: string[] | undefined, firm = false): CallTarget => ({
 	tool: "bash",
 	input: { command: "x" },
 	dirs,
-	protected: isProtected,
+	firm,
 });
 
 const choice = (target: CallTarget, key: string) => grantChoices(target).find((c) => c.key === key);
@@ -69,7 +69,7 @@ describe("grantChoices", () => {
 		});
 	});
 
-	it("offers nothing for bash when its directory is unknown, or for protected targets", () => {
+	it("offers nothing for bash when its directory is unknown, or for firm questions", () => {
 		assert.deepEqual(grantChoices(bash(undefined)), []);
 		assert.deepEqual(grantChoices(bash([clipboard], true)), []);
 		assert.deepEqual(grantChoices(edit(shot("permissions.json"), true)), []);
@@ -107,7 +107,7 @@ describe("grantMatches", () => {
 		assert.ok(!grantMatches(tree, bash(undefined)));
 	});
 
-	it("never covers protected targets", () => {
+	it("never covers firm questions (ask rules, protected files)", () => {
 		assert.ok(!grantMatches(tree, edit(shot("permissions.json"), true)));
 		assert.ok(!grantMatches(tree, bash([clipboard], true)));
 	});

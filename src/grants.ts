@@ -33,8 +33,8 @@ export interface CallTarget {
 	absPath?: string;
 	/** Every directory a bash command may run in; undefined when that cannot be known. */
 	dirs?: string[];
-	/** Touches (or, for bash, mentions) a protected permission file: no grant covers it. */
-	protected?: boolean;
+	/** Asks every time (an `ask` rule, a protected file, a mentioned strict rule): no grant covers it. */
+	firm?: boolean;
 }
 
 /** The directory a file-tool call works in: the target itself if it is a directory. */
@@ -75,7 +75,7 @@ function covers(grant: { dir: string; recursive: boolean }, p: string, isDir: bo
 export function grantMatches(grant: Grant, target: CallTarget): boolean {
 	if (grant.kind === "tool") return grant.tool === target.tool && !target.absPath;
 
-	if (target.protected) return false;
+	if (target.firm) return false;
 
 	if (target.absPath) return covers(grant, target.absPath, false);
 
@@ -114,8 +114,8 @@ export function grantChoices(target: CallTarget): GrantChoice[] {
 		return [{ key: "a", label: `Always: ${tool} (any input)`, grant: { kind: "tool", tool } }];
 	}
 
-	// Protected files are never covered by a grant, so none is offered.
-	if (target.protected) return [];
+	// A firm question is never covered by a grant, so none is offered.
+	if (target.firm) return [];
 	const short = shortPath(folder);
 
 	return [

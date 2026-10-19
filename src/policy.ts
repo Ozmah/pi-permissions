@@ -1,36 +1,51 @@
 /**
  * Rule matching and permission decisions. Pure logic, no Pi imports.
+ *
+ * Every matching rule counts and the strictest wins: halt > deny > ask >
+ * yes-i-am-very-sure. Without a rule, reading inside the project runs (when
+ * `readonly` is on) and anything else asks.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type Action, type JsonObject, type PermissionConfig, type RuleMap, isString } from "./config.ts";
+import {
+	type JsonObject,
+	type PermissionConfig,
+	type Rule,
+	type RuleMap,
+	type Verdict,
+	isString,
+	ruleVerdict,
+} from "./config.ts";
 import { type PathArg, analyzeReadonly, cdEffect } from "./readonly.ts";
 import { type Token, normalizeSegment, parseShell, tokenize } from "./shell.ts";
 
-/**
- * Why an action was reached. `fallback` is a `"*"` rule, reported apart so it
- * never reads like something being granted. `note` forces confirmation.
- */
+export type Section = "commands" | "paths" | "tools";
+
+/** Why a verdict was reached. `note` and `skipped` explain, they match no rule. */
 export type Reason =
-	| { kind: "match"; subject: string; section: string; pattern: string; action: Action }
-	| { kind: "fallback" | "default"; subject: string; section: string; action: Action }
+	| { kind: "rule"; subject: string; section: Section; pattern: string; rule: Rule; action: Verdict }
+	| { kind: "default"; subject: string; action: "ask" }
+	| { kind: "outside"; subject: string; action: "ask" }
+	| { kind: "inside"; subject: string; action: "allow" }
+	| { kind: "readonly"; subject: string; action: Verdict }
 	| { kind: "note"; subject: string; action: "ask" }
-	| { kind: "readonly"; subject: string; action: Action }
 	| { kind: "skipped"; subject: string; why: string };
 
 export function formatReason(r: Reason): string {
 	switch (r.kind) {
-		case "match":
-			return `${r.subject} → matched ${r.section} "${r.pattern}": ${r.action}`;
-		case "fallback":
-			return `${r.subject} → no matching ${r.section} rule (fallback "*": ${r.action})`;
+		case "rule":
+			return `${r.subject} → ${r.section} "${r.pattern}": ${r.rule}`;
 		case "default":
-			return `${r.subject} → no matching ${r.section} rule (default: ${r.action})`;
-		case "note":
-			return `${r.subject} → requires confirmation`;
+			return `${r.subject} → no rule: ask`;
+		case "outside":
+			return `${r.subject} → outside the project, no rule: ask`;
+		case "inside":
+			return `${r.subject} → read inside the project: allow`;
 		case "readonly":
 			return `${r.subject} → read-only command: ${r.action}`;
+		case "note":
+			return `${r.subject} → requires confirmation`;
 		case "skipped":
 			return `${r.subject} → not read-only: ${r.why}`;
 	}
@@ -42,15 +57,18 @@ export function needsDecision(r: Reason): boolean {
 }
 
 export interface Decision {
-	action: Action;
+	action: Verdict;
 	/** The rules that produced the decision. */
 	reasons: Reason[];
 	/** Resolved target path for file tools, symlinks followed. Rules and grants use this one. */
 	absPath?: string;
 	/** The path as requested (absolute, symlinks not followed). Differs from `absPath` through a symlink. */
 	requestedPath?: string;
-	/** A write tool targets a protected permission file, or a bash command that may write mentions one. */
-	protected?: boolean;
+	/**
+	 * Asks every time: an `ask` rule, a protected file, or a strict rule mentioned
+	 * somewhere in a command. No grant covers it.
+	 */
+	firm?: boolean;
 	/** Bash: every directory the command may run in, following its `cd`s. Undefined when unknown. */
 	workingDirs?: string[];
 }
@@ -66,9 +84,9 @@ export interface DecideOptions {
 	cdpath?: string;
 }
 
-const RANK: Record<Action, number> = { allow: 0, ask: 1, deny: 2 };
+const RANK: Record<Verdict, number> = { allow: 0, ask: 1, deny: 2, halt: 3 };
 
-/** Tools whose `path` argument is checked against `external_directory`. */
+/** Tools whose `path` argument is checked against `paths`. */
 const FILE_TOOLS: ReadonlySet<string> = new Set(["read", "write", "edit", "ls", "find", "grep"]);
 const WRITE_TOOLS: ReadonlySet<string> = new Set(["write", "edit"]);
 
@@ -77,8 +95,8 @@ const CONFIG_NAME = "permissions.json";
 /** Max length of a command segment quoted inside a reason (the full command is shown separately). */
 const REASON_SNIPPET = 80;
 
-export function strictest(...actions: Action[]): Action {
-	return actions.reduce<Action>((a, b) => (RANK[b] > RANK[a] ? b : a), "allow");
+export function strictest(...verdicts: Verdict[]): Verdict {
+	return verdicts.reduce<Verdict>((a, b) => (RANK[b] > RANK[a] ? b : a), "allow");
 }
 
 // ---------------------------------------------------------------------------
@@ -106,46 +124,32 @@ function globToRegex(glob: string): RegExp {
 }
 
 /**
- * `*` matches anything (including `/` and spaces), `?` one character.
- * A trailing ` *` or `/*` also matches the bare prefix: `git status *` matches
- * `git status`, `~/dev/*` matches `~/dev`.
+ * `*` matches anything (including `/` and spaces), `?` one character, so `**`
+ * is the same as `*`. A trailing ` *`, `/*` or `/**` also matches the bare
+ * prefix: `git status *` matches `git status`, `~/.ssh/**` matches `~/.ssh`.
  */
 export function matches(pattern: string, value: string): boolean {
 	if (globToRegex(pattern).test(value)) return true;
 
-	if (pattern.endsWith(" *") || pattern.endsWith("/*")) return value === pattern.slice(0, -2);
+	const bare = pattern.replace(/(?: \*|\/\*\*?)$/, "");
 
-	return false;
-}
-
-/** Specificity = number of literal (non-wildcard) characters. */
-function specificity(pattern: string): number {
-	return pattern.replace(/[*?]/g, "").length;
+	return bare !== pattern && value === bare;
 }
 
 export interface RuleHit {
-	action: Action;
 	pattern: string;
+	rule: Rule;
 }
 
-/** Most specific matching pattern wins; on ties the strictest action wins. */
-export function resolveRules(
+/** Every rule whose pattern matches `value`. */
+export function matchRules(
 	rules: RuleMap,
 	value: string,
 	normalizePattern: (p: string) => string = (p) => p,
-): RuleHit | undefined {
-	let best: (RuleHit & { spec: number }) | undefined;
-
-	for (const [pattern, action] of Object.entries(rules)) {
-		if (!matches(normalizePattern(pattern), value)) continue;
-		const spec = specificity(pattern);
-
-		if (!best || spec > best.spec || (spec === best.spec && RANK[action] > RANK[best.action])) {
-			best = { action, pattern, spec };
-		}
-	}
-
-	return best && { action: best.action, pattern: best.pattern };
+): RuleHit[] {
+	return Object.entries(rules).flatMap(([pattern, rule]) =>
+		matches(normalizePattern(pattern), value) ? [{ pattern, rule }] : [],
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -180,38 +184,72 @@ export function isInside(child: string, parent: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Decisions
+// Judgements: a verdict and its reasons
 // ---------------------------------------------------------------------------
+
+interface Judgement {
+	action: Verdict;
+	reasons: Reason[];
+	/** An `ask` rule matched: the question cannot be skipped by a grant. */
+	firm: boolean;
+}
 
 function snippet(s: string): string {
 	return s.length > REASON_SNIPPET ? `${s.slice(0, REASON_SNIPPET - 1)}…` : s;
-}
-
-/** Explains which rule produced an action. */
-function explain(subject: string, section: string, hit: RuleHit | undefined, action: Action): Reason {
-	if (hit && hit.pattern !== "*") return { kind: "match", subject, section, pattern: hit.pattern, action };
-
-	return { kind: hit ? "fallback" : "default", subject, section, action };
 }
 
 function note(subject: string): Reason {
 	return { kind: "note", subject, action: "ask" };
 }
 
-function decideTool(cfg: PermissionConfig, toolName: string): Decision {
-	const hit = resolveRules(cfg.tools, toolName);
-	const action = hit?.action ?? cfg.default;
+function fromRules(subject: string, section: Section, hits: RuleHit[]): Judgement {
+	const reasons: Reason[] = hits.map((h) => ({ kind: "rule", subject, section, ...h, action: ruleVerdict(h.rule) }));
 
-	return { action, reasons: [explain(toolName, "tools", hit, action)] };
+	return {
+		action: strictest(...hits.map((h) => ruleVerdict(h.rule))),
+		reasons,
+		firm: hits.some((h) => h.rule === "ask"),
+	};
 }
 
-function decidePath(cfg: PermissionConfig, absPath: string, cwd: string): Decision | undefined {
-	if (isInside(absPath, cwd)) return undefined;
-	const hit = resolveRules(cfg.external_directory, absPath, expandHome);
-	const action = hit?.action ?? "ask";
+/** Path rules match the real path and the requested one, so a symlink cannot dodge either. */
+function pathHits(cfg: PermissionConfig, real: string, requested: string): RuleHit[] {
+	const hits = matchRules(cfg.paths, real, expandHome);
 
-	return { action, reasons: [explain("outside project", "external_directory", hit, action)] };
+	for (const h of matchRules(cfg.paths, requested, expandHome)) {
+		if (!hits.some((x) => x.pattern === h.pattern)) hits.push(h);
+	}
+
+	return hits;
 }
+
+/** A path as shown in reasons: both forms when a symlink makes them differ. */
+function pathSubject(real: string, requested: string): string {
+	return real === requested ? real : `${real} (symlink from ${requested})`;
+}
+
+/**
+ * A path read or written. Rules decide when they match; otherwise reading inside
+ * the project runs (with `readonly`) and anything else asks.
+ */
+function judgePath(cfg: PermissionConfig, real: string, requested: string, project: string, read: boolean): Judgement {
+	const subject = pathSubject(real, requested);
+	const hits = pathHits(cfg, real, requested);
+
+	if (hits.length) return fromRules(subject, "paths", hits);
+
+	if (!isInside(real, project))
+		return { action: "ask", reasons: [{ kind: "outside", subject, action: "ask" }], firm: false };
+
+	if (read && cfg.readonly)
+		return { action: "allow", reasons: [{ kind: "inside", subject, action: "allow" }], firm: false };
+
+	return { action: "ask", reasons: [{ kind: "default", subject, action: "ask" }], firm: false };
+}
+
+// ---------------------------------------------------------------------------
+// Bash
+// ---------------------------------------------------------------------------
 
 /**
  * Directories a segment may run in. `cd` adds one and keeps the previous ones
@@ -255,21 +293,15 @@ function followCd(tokens: Token[] | undefined, wd: WorkingDirs, opts: DecideOpti
 	for (const { real } of argPaths(effect.target, wd, opts.cwd)) if (!wd.dirs.includes(real)) wd.dirs.push(real);
 }
 
-type ReadonlyOutcome = { action: Action; reasons: Reason[] } | { why: string };
-
 /**
- * A read-only segment takes `readonly_commands`, made stricter by every path it
- * reads outside the project, through `external_directory`.
+ * The paths a read-only segment reads, resolved; why it is not read-only; or
+ * undefined when it is not one of the known read-only commands at all.
  */
-function decideReadonly(
-	cfg: PermissionConfig,
-	readonly: Action,
+function readonlyPaths(
 	tokens: Token[],
 	wd: WorkingDirs,
 	opts: DecideOptions,
-): ReadonlyOutcome | undefined {
-	// Without operands, `ls`, `grep -r` or `find` read the working directory itself.
-	if (!wd.known) return { why: "the working directory is unknown after an earlier command" };
+): ResolvedArg[] | { why: string } | undefined {
 	const [head] = tokens;
 	let paths: PathArg[];
 
@@ -287,23 +319,81 @@ function decideReadonly(
 		paths = result.paths;
 	}
 
-	let action = readonly;
-	const reasons: Reason[] = [];
-	const seen = new Set<string>();
+	// Without operands, `ls`, `grep -r` or `find` read the working directory itself.
+	if (!wd.known) return { why: "the working directory is unknown after an earlier command" };
+	const resolved: ResolvedArg[] = [];
 
 	for (const arg of paths) {
-		for (const { real, requested } of argPaths(arg, wd, opts.cwd)) {
-			if (seen.has(real) || isInside(real, opts.cwd)) continue;
-			seen.add(real);
-			const hit = resolveRules(cfg.external_directory, real, expandHome);
-			const a = hit?.action ?? "ask";
-			const subject = real === requested ? real : `${real} (symlink from ${requested})`;
-			reasons.push(explain(subject, "external_directory", hit, a));
-			action = strictest(action, a);
-		}
+		for (const r of argPaths(arg, wd, opts.cwd)) if (!resolved.some((x) => x.real === r.real)) resolved.push(r);
 	}
 
-	return { action, reasons };
+	return resolved;
+}
+
+/** Characters that end a command or path name in shell text. */
+const BOUNDARY = "\\s;&|()<>`'\"";
+
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * `phrase` as whole words in `text`, any spacing between them; `/` before it
+ * too, so `/usr/bin/sudo` is `sudo`.
+ */
+function mentions(text: string, phrase: string): boolean {
+	const words = phrase.split(/\s+/).map(escape).join("\\s+");
+
+	return new RegExp(`(^|[${BOUNDARY}/$=])${words}(?=$|[${BOUNDARY}])`).test(text);
+}
+
+/**
+ * The command a `commands` pattern names, when it names one: `git push` for
+ * `git push *` or `git push`. Undefined when a wildcard filters the arguments
+ * (`cat *secret*`): mentioning `cat` alone says nothing about that rule.
+ */
+function commandPhrase(pattern: string): string | undefined {
+	const phrase = pattern.replace(/ \*$/, "");
+
+	return phrase && !/[*?]/.test(phrase) ? phrase : undefined;
+}
+
+/** How a `paths` pattern can be written in a command: `~/.ssh`, `/home/u/.ssh`, `$HOME/.ssh`, `.env`. */
+function pathNeedles(pattern: string): string[] {
+	const pieces = pattern.split(/[*?]+/).map((p) => p.replace(/^\/|\/$/g, ""));
+	const literal = pattern.search(/[*?]/) === 0 ? (pieces.at(-1) ?? "") : (pieces[0] ?? "");
+
+	if (literal.length < 3 || literal === "~") return [];
+
+	if (!literal.startsWith("~/")) return [literal];
+	const rest = literal.slice(1);
+
+	return [literal, `${os.homedir()}${rest}`, `$HOME${rest}`, `\${HOME}${rest}`];
+}
+
+const isStrict = (rule: Rule) => rule === "ask" || rule === "deny" || rule === "halt";
+
+/**
+ * The safety net: a strict rule whose command or path appears anywhere in the
+ * text (`$(sudo …)`, `bash -c "sudo …"`, a script) asks, firmly. It does not
+ * block: the text may only mention it (`grep sudo log`).
+ */
+function mentionedRules(cfg: PermissionConfig, command: string, matched: Set<string>): Reason[] {
+	const reasons: Reason[] = [];
+
+	for (const [pattern, rule] of Object.entries(cfg.commands)) {
+		const phrase = commandPhrase(pattern);
+
+		if (!isStrict(rule) || matched.has(`commands:${pattern}`) || !phrase || !mentions(command, phrase)) continue;
+		reasons.push(note(`mentions "${phrase}" (commands "${pattern}": ${rule})`));
+	}
+
+	for (const [pattern, rule] of Object.entries(cfg.paths)) {
+		if (!isStrict(rule) || matched.has(`paths:${pattern}`)) continue;
+		const needle = pathNeedles(pattern).find((n) => mentions(command, n) || command.includes(`${n}/`));
+
+		if (needle) reasons.push(note(`mentions "${needle}" (paths "${pattern}": ${rule})`));
+	}
+
+	return reasons;
 }
 
 function decideBash(cfg: PermissionConfig, command: string, opts: DecideOptions): Decision {
@@ -312,10 +402,12 @@ function decideBash(cfg: PermissionConfig, command: string, opts: DecideOptions)
 
 	if (segments.length === 0) return { action: "ask", reasons: [note("empty command")] };
 
-	let action: Action = "allow";
+	let action: Verdict = "allow";
+	let firm = false;
 	const reasons: Reason[] = [];
 	const wd: WorkingDirs = { dirs: [opts.cwd], known: true };
-	const readonly = cfg.readonly_commands;
+	/** Rules matched by a segment or a path, as `section:pattern`, so the safety net skips them. */
+	const matched = new Set<string>();
 	/** Every segment passed the read-only analysis, so none of them can write. */
 	let onlyReads = true;
 
@@ -323,30 +415,46 @@ function decideBash(cfg: PermissionConfig, command: string, opts: DecideOptions)
 		const text = normalizeSegment(seg.text);
 		const subject = `"${snippet(text)}"`;
 		const tokens = tokenize(seg.text);
-		const hit = resolveRules(cfg.bash, text);
-		const ruleAction = hit?.action ?? cfg.default;
-		let segAction = ruleAction;
-		let segReasons = [explain(subject, "bash", hit, ruleAction)];
+		const cmdHits = matchRules(cfg.commands, text);
+		const ro = cfg.readonly && tokens ? readonlyPaths(tokens, wd, opts) : undefined;
+		const paths = Array.isArray(ro) ? ro.map((r) => judgePath(cfg, r.real, r.requested, opts.cwd, true)) : [];
+		const ruledPaths = paths.filter((p) => p.reasons.some((r) => r.kind === "rule"));
+		let judged: Judgement;
 
-		// Read-only analysis can only loosen the "*" fallback or the default; explicit rules always win.
-		const explicit = hit !== undefined && hit.pattern !== "*";
-		const looser = readonly !== undefined && RANK[readonly] < RANK[ruleAction];
-		const ro = readonly && looser && !explicit && tokens ? decideReadonly(cfg, readonly, tokens, wd, opts) : undefined;
+		for (const h of cmdHits) matched.add(`commands:${h.pattern}`);
 
-		if (ro && "why" in ro) {
+		for (const r of ruledPaths.flatMap((p) => p.reasons)) if (r.kind === "rule") matched.add(`paths:${r.pattern}`);
+
+		if (cmdHits.length) {
+			// A command rule decides, made stricter by any path rule it reads through.
+			const cmd = fromRules(subject, "commands", cmdHits);
+			const all = [cmd, ...ruledPaths];
+			judged = {
+				action: strictest(...all.map((j) => j.action)),
+				reasons: all.flatMap((j) => j.reasons),
+				firm: all.some((j) => j.firm),
+			};
+		} else if (Array.isArray(ro)) {
+			const verdict = strictest(...paths.map((p) => p.action));
+			const shown = paths.flatMap((p) => p.reasons).filter((r) => r.kind !== "inside");
+			judged = {
+				action: verdict,
+				reasons: [{ kind: "readonly", subject, action: verdict }, ...shown],
+				firm: paths.some((p) => p.firm),
+			};
+		} else {
+			judged = { action: "ask", reasons: [{ kind: "default", subject, action: "ask" }], firm: false };
+
 			// The same cause (e.g. an unknown working directory) is reported once, not per segment.
-			if (!reasons.some((r) => r.kind === "skipped" && r.why === ro.why)) {
-				segReasons.push({ kind: "skipped", subject, why: ro.why });
+			if (ro && !Array.isArray(ro) && !reasons.some((r) => r.kind === "skipped" && r.why === ro.why)) {
+				judged.reasons.push({ kind: "skipped", subject, why: ro.why });
 			}
+		}
 
-			onlyReads = false;
-		} else if (ro && readonly && RANK[ro.action] <= RANK[ruleAction]) {
-			segAction = ro.action;
-			segReasons = [{ kind: "readonly", subject, action: readonly }, ...ro.reasons];
-		} else onlyReads = false;
-
-		reasons.push(...segReasons);
-		action = strictest(action, segAction);
+		if (!Array.isArray(ro)) onlyReads = false;
+		reasons.push(...judged.reasons);
+		action = strictest(action, judged.action);
+		firm ||= judged.firm;
 		followCd(tokens, wd, opts);
 	}
 
@@ -355,16 +463,23 @@ function decideBash(cfg: PermissionConfig, command: string, opts: DecideOptions)
 		reasons.push(note(`contains ${risky.join(", ")}`));
 	}
 
+	const net = mentionedRules(cfg, command, matched);
+
+	if (net.length) {
+		action = strictest(action, "ask");
+		firm = true;
+		reasons.push(...net);
+	}
+
 	// Best effort: bash can write anywhere, so mentioning a protected path (absolute, or
 	// any `permissions.json`, which covers relative forms) requires confirmation. The
 	// protection is against writes: a command made only of read-only segments is exempt.
 	const mentionsConfig = protectedPaths.some((p) => p.endsWith(CONFIG_NAME)) && command.includes(CONFIG_NAME);
-	const mentions = mentionsConfig || protectedPaths.some((p) => command.includes(p));
+	const mentionsProtected = mentionsConfig || protectedPaths.some((p) => command.includes(p));
 
-	const touchesProtected = mentions && !(onlyReads && risky.length === 0);
-
-	if (touchesProtected) {
+	if (mentionsProtected && !(onlyReads && risky.length === 0)) {
 		action = strictest(action, "ask");
+		firm = true;
 		reasons.push(note("mentions a protected permission file"));
 	}
 
@@ -372,44 +487,58 @@ function decideBash(cfg: PermissionConfig, command: string, opts: DecideOptions)
 
 	if (wd.known) decision.workingDirs = wd.dirs;
 
-	// A grant never covers a command that may write a protected file.
-	if (touchesProtected) decision.protected = true;
+	if (firm) decision.firm = true;
 
 	return decision;
 }
 
-export function decide(cfg: PermissionConfig, toolName: string, input: JsonObject, opts: DecideOptions): Decision {
-	const protectedPaths = opts.protectedPaths ?? [];
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
 
+export function decide(cfg: PermissionConfig, toolName: string, input: JsonObject, opts: DecideOptions): Decision {
 	if (toolName === "bash") return decideBash(cfg, isString(input.command) ? input.command : "", opts);
 
-	const tool = decideTool(cfg, toolName);
+	const toolHits = matchRules(cfg.tools, toolName);
+	const tool = fromRules(toolName, "tools", toolHits);
 
-	if (!FILE_TOOLS.has(toolName)) return tool;
+	if (!FILE_TOOLS.has(toolName)) {
+		if (toolHits.length) return withFirm({ action: tool.action, reasons: tool.reasons }, tool.firm);
+
+		return { action: "ask", reasons: [{ kind: "default", subject: toolName, action: "ask" }] };
+	}
 
 	const rawPath = isString(input.path) ? input.path : undefined;
 	const absPath = resolvePath(rawPath, opts.cwd);
 	const requestedPath = path.resolve(opts.cwd, expandHome(rawPath ?? "."));
-	let action = tool.action;
-	const reasons = [...tool.reasons];
+	const isWrite = WRITE_TOOLS.has(toolName);
+	const target = judgePath(cfg, absPath, requestedPath, opts.cwd, !isWrite);
+	const ruledPath = target.reasons.some((r) => r.kind === "rule");
 
-	const outside = decidePath(cfg, absPath, opts.cwd);
+	// Rules decide when any matches (tool or path); otherwise the path's default does.
+	const ruled: Judgement[] = [];
 
-	if (outside) {
-		action = strictest(action, outside.action);
-		reasons.push(...outside.reasons);
-	}
+	if (toolHits.length) ruled.push(tool);
 
-	const isProtected = WRITE_TOOLS.has(toolName) && protectedPaths.some((p) => isInside(absPath, p));
+	if (ruledPath) ruled.push(target);
+	const parts = ruled.length ? ruled : [target];
+	let action = strictest(...parts.map((j) => j.action));
+	let firm = parts.some((j) => j.firm);
+	const reasons = parts.flatMap((j) => j.reasons);
+
+	const isProtected = isWrite && (opts.protectedPaths ?? []).some((p) => isInside(absPath, p));
 
 	if (isProtected) {
 		action = strictest(action, "ask");
+		firm = true;
 		reasons.push(note("protected permission file"));
 	}
 
-	const result: Decision = { action, reasons, absPath, requestedPath };
+	return withFirm({ action, reasons, absPath, requestedPath }, firm);
+}
 
-	if (isProtected) result.protected = true;
+function withFirm(d: Decision, firm: boolean): Decision {
+	if (firm) d.firm = true;
 
-	return result;
+	return d;
 }
