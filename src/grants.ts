@@ -59,12 +59,15 @@ function commonDir(dirs: string[]): string {
 	});
 }
 
-/** Folders too broad to silence: one stray keypress would grant the whole home or disk. */
+/**
+ * Folders too broad to silence: one stray keypress would grant the whole home
+ * or disk. That is home itself and every folder containing it (`/home`).
+ */
 function tooBroad(dir: string): boolean {
-	return dir === os.homedir() || dir === path.parse(dir).root;
+	return isInside(os.homedir(), dir) || dir === path.parse(dir).root;
 }
 
-/** The folder a call works in, which is what a grant is offered for. Never home or the root. */
+/** The folder a call works in, which is what a grant is offered for. Never home, a folder containing it, or the root. */
 function folderOf(target: CallTarget): string | undefined {
 	const folder = target.absPath ? scopeDir(target.absPath) : target.dirs?.length ? commonDir(target.dirs) : undefined;
 

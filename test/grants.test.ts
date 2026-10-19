@@ -82,6 +82,14 @@ describe("grantChoices", () => {
 		assert.deepEqual(grantChoices(read(path.join(os.homedir(), ".bashrc"))), []);
 	});
 
+	it("never offers a folder that contains home, like /home", () => {
+		const aboveHome = path.dirname(os.homedir());
+		const sibling = path.join(aboveHome, "other-user");
+		assert.deepEqual(grantChoices(bash([aboveHome])), []);
+		assert.deepEqual(grantChoices(bash([os.homedir(), sibling])), [], "a cd next to home widens to its parent");
+		assert.equal(grantChoices(bash([sibling])).length, 2, "a folder next to home, not containing it, is offered");
+	});
+
 	it("offers any-input for tools without a path", () => {
 		assert.deepEqual(
 			grantChoices({ tool: "mcp__x", input: {} }).map((c) => c.label),

@@ -126,7 +126,7 @@ Writing the permission files or the extension's own files always asks, whatever 
 
 ### stfu pi on a folder
 
-`a` ("stfu pi on <folder>/") gives every tool, bash included, total access to the folder the call works in until the session ends. `d` ("…and subfolders") covers its subfolders too. For file tools the folder is the file's. For bash it is the folder the command runs in, following its `cd`s. No option is offered when that folder cannot be known, or when it is your home or the root, where one stray keypress would silence everything. Tools without a path get `a` for any input.
+`a` ("stfu pi on <folder>/") gives every tool, bash included, total access to the folder the call works in until the session ends. `d` ("…and subfolders") covers its subfolders too. For file tools the folder is the file's. For bash it is the folder the command runs in, following its `cd`s. No option is offered when that folder cannot be known, or when it is your home, a folder containing it (`/home`) or the root, where one stray keypress would silence everything. Tools without a path get `a` for any input.
 
 Why folders and not commands: agents today send endless one-liners, chaining `cd`, pipes and inline scripts to do something complex in a single command (blame Opus 5.5 and Sol 6.1). An exact command never comes back twice, so "always this command" was useless. Trusting a folder is the decision that actually holds, for now at least.
 
