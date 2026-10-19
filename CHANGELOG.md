@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Inline scripts (`python3 - <<'EOF'`, `python3 -c`, `node -e`, `bash -c`/`-s`, `ruby -e`, `perl -e`, `php -r`) are labeled in the prompt ("Python script, 12 lines") and highlighted in their language. Display only: they still go through the bash rules.
 - Here-documents: the body is data for its command, no longer split into segments. Shown as a block under the command. Substitutions in an unquoted body and a missing delimiter ask. A here-document or here-string feeding a read-only command is allowed.
 - Reasons are grouped: what needs a decision first, what is already allowed folded into one line. The same cause is reported once. A blocked call tells the agent only what was refused.
 - Read-only reasons show both paths when a read goes through a symlink.

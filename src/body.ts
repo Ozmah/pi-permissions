@@ -4,6 +4,7 @@
 import { type Json, type JsonObject, isJsonObject, isNumber, isString } from "./config.ts";
 import { formatReason, needsDecision, type Reason } from "./policy.ts";
 import { ACTION_COLOR, type BodyLine, type Span } from "./prompt-ui.ts";
+import { inlineScript } from "./scripts.ts";
 import { displayLines, parseShell } from "./shell.ts";
 import { onlySgr, sanitize } from "./text.ts";
 
@@ -47,6 +48,22 @@ function highlightLines(raw: string, lang: string | undefined, deps: BodyDeps): 
 	return out?.length === count ? out.map(onlySgr) : undefined;
 }
 
+/** Lines under a command, behind a `│` margin, highlighted when the language is known. */
+function blockLines(code: string, lang: string | undefined, deps: BodyDeps): BodyLine[] {
+	const highlighted = highlightLines(code, lang, deps);
+	const rows = highlighted ?? code.split("\n");
+
+	return rows.map((text) => ({
+		text,
+		styled: highlighted !== undefined,
+		prefix: "  │ ",
+		prefixColor: "dim",
+		contPrefix: "  │   ",
+	}));
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
 function bashBody(input: JsonObject, deps: BodyDeps): BodyLine[] {
 	const lines: BodyLine[] = [heading("Command")];
 	let first = true;
@@ -68,14 +85,23 @@ function bashBody(input: JsonObject, deps: BodyDeps): BodyLine[] {
 			first = false;
 		}
 
-		// Here-document bodies: data for the command, shown as a block under it.
-		for (const h of segment.heredocs ?? []) {
-			for (const line of h.body.split("\n")) {
-				lines.push({ text: line, prefix: "  │ ", prefixColor: "dim", contPrefix: "  │   " });
-			}
+		// An inline script is labeled and highlighted in its language, so the decision can be read.
+		const script = inlineScript(segment);
+		const label = (code: string) => `${script?.name} script, ${plural(code.split("\n").length, "line")}`;
 
-			lines.push({ text: h.delimiter, color: "dim", prefix: "  " });
+		if (script?.from === "argument") {
+			lines.push({ text: label(script.code), color: "accent", prefix: "  ┌ ", prefixColor: "dim" });
+			lines.push(...blockLines(script.code, script.language, deps), { text: "", prefix: "  └", prefixColor: "dim" });
 		}
+
+		// Here-document bodies: data for the command, shown as a block under it.
+		segment.heredocs?.forEach((h, n) => {
+			const isScript = script?.from === "heredoc" && n === 0;
+
+			if (isScript) lines.push({ text: label(h.body), color: "accent", prefix: "  ┌ ", prefixColor: "dim" });
+			lines.push(...blockLines(h.body, isScript ? script.language : undefined, deps));
+			lines.push({ text: h.delimiter, color: "dim", prefix: "  " });
+		});
 	});
 
 	if (isNumber(input.timeout)) lines.push({ text: `timeout: ${input.timeout}s`, color: "dim" });

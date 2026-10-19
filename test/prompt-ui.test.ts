@@ -361,9 +361,34 @@ describe("buildBody", () => {
 	});
 
 	it("shows a here-document body as a block under its command", () => {
-		const body = buildBody("bash", { command: "python3 - <<'PY'\nprint(1)\nPY\nls" }, undefined, []);
+		const body = buildBody("bash", { command: "cat <<'EOF'\nhello\nEOF\nls" }, undefined, []);
 		const block = body.map((l) => `${l.prefix ?? ""}${l.text}`);
-		assert.deepEqual(block.slice(0, 5), ["Command", "$ python3 - <<'PY'", "  \u2502 print(1)", "  PY", "  ls"]);
+		assert.deepEqual(block.slice(0, 5), ["Command", "$ cat <<'EOF'", "  │ hello", "  EOF", "  ls"]);
+	});
+
+	it("labels an inline script and highlights it in its language", () => {
+		const langs: string[] = [];
+
+		const highlight = (code: string, lang: string) => {
+			langs.push(lang);
+
+			return code.split("\n");
+		};
+
+		const body = buildBody("bash", { command: "python3 - <<'PY'\nimport os\nprint(1)\nPY" }, undefined, [], {
+			highlight,
+		});
+
+		const block = body.map((l) => `${l.prefix ?? ""}${l.text}`);
+		const script = ["$ python3 - <<'PY'", "  ┌ Python script, 2 lines", "  │ import os", "  │ print(1)", "  PY"];
+		assert.deepEqual(block.slice(1, 6), script);
+		assert.ok(langs.includes("python"));
+	});
+
+	it("shows -c code as a labeled block", () => {
+		const body = buildBody("bash", { command: `python3 -c "print(1)"` }, undefined, []);
+		const block = body.map((l) => `${l.prefix ?? ""}${l.text}`);
+		assert.deepEqual(block.slice(2, 5), ["  ┌ Python script, 1 line", "  │ print(1)", "  └"]);
 	});
 
 	it("lists what needs a decision, then folds what is allowed into one line", () => {

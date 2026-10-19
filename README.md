@@ -51,6 +51,8 @@ Values: `allow`, `ask`, `deny`.
 
 **Bash.** Commands are split on `&&`, `||`, `|`, `;`, `&` and newlines, outside quotes, and every segment is checked. Command substitution, process substitution, redirection to a file and unclosed quotes always ask. Here-document bodies (`<<EOF`, `<<'EOF'`, `<<-EOF`) are data for their command, not segments: the prompt shows them as a block under it. A substitution in an unquoted here-document asks, and so does a missing delimiter.
 
+Inline scripts (`python3 - <<'EOF'`, `python3 -c`, `node -e`, `bash -c`, `ruby -e`, `perl -e`, `php -r`) are labeled and highlighted in their language. They are arbitrary code: they always go through the bash rules, and their content is shown, never interpreted.
+
 The prompt lists first what needs a decision, then folds what is already allowed into one line.
 
 **Read-only commands.** With `"readonly_commands": "allow"`, a segment that only reads gets that action when every path it reads is inside the project or allowed by `external_directory`, so `cd apps/server && grep -n foo src/*.ts | head -20` runs without asking. Explicit `bash` rules still win; it only replaces the `"*"` fallback or the default, and never makes them stricter.
