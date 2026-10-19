@@ -276,12 +276,29 @@ describe("decide: read-only commands", () => {
 		assert.equal(action("cat $(echo x)"), "ask");
 	});
 
+	it("says why a read-only command asks, and marks operands that are not files", () => {
+		const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-permissions-ro-why-")));
+		fs.writeFileSync(path.join(dir, "types.d.ts"), "x");
+		const reasons = bash(`cd ${dir} && grep -n "execute(" types.d.ts`).reasons.map(formatReason);
+		assert.ok(
+			reasons.includes(`"grep -n \"execute(\" types.d.ts" → read-only command, reads outside the project: ask`),
+		);
+		assert.ok(
+			reasons.includes(`${dir}/execute( (no such file, checked as a path) → outside the project, no rule: ask`),
+		);
+		assert.ok(reasons.includes(`${dir}/types.d.ts → outside the project, no rule: ask`), "a real file is not marked");
+
+		const ruled = mergeConfigs({ paths: { "**/.env": "ask" } });
+		const [head] = decide(ruled, "bash", { command: "cat .env" }, { cwd }).reasons.map(formatReason);
+		assert.equal(head, `"cat .env" → read-only command, a path rule applies: ask`);
+	});
+
 	it("explains the decision", () => {
 		assert.deepEqual(bash("cat x").reasons.map(formatReason), [`"cat x" → read-only command: allow`]);
 
 		assert.deepEqual(bash("cat ~/.ssh/id_rsa").reasons.map(formatReason), [
-			`"cat ~/.ssh/id_rsa" → read-only command: ask`,
-			`${home}/.ssh/id_rsa → outside the project, no rule: ask`,
+			`"cat ~/.ssh/id_rsa" → read-only command, reads outside the project: ask`,
+			`${home}/.ssh/id_rsa (no such file, checked as a path) → outside the project, no rule: ask`,
 		]);
 
 		assert.deepEqual(bash("rg --pre sh x").reasons.map(formatReason), [

@@ -75,6 +75,13 @@ describe("grantChoices", () => {
 		assert.deepEqual(grantChoices(edit(shot("permissions.json"), true)), []);
 	});
 
+	it("never offers home or the root: one stray keypress would silence everything", () => {
+		assert.deepEqual(grantChoices(bash([os.homedir()])), []);
+		assert.deepEqual(grantChoices(bash([clipboard, os.homedir()])), [], "a cd that widens the common folder to home");
+		assert.deepEqual(grantChoices(bash(["/"])), []);
+		assert.deepEqual(grantChoices(read(path.join(os.homedir(), ".bashrc"))), []);
+	});
+
 	it("offers any-input for tools without a path", () => {
 		assert.deepEqual(
 			grantChoices({ tool: "mcp__x", input: {} }).map((c) => c.label),

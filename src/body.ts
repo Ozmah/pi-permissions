@@ -172,7 +172,7 @@ export function reasonSpans(r: Reason): Span[] {
 
 	switch (r.kind) {
 		case "readonly":
-			return [...head, muted("read-only command: "), action];
+			return [...head, muted(`read-only command${r.why ? `, ${r.why}` : ""}: `), action];
 		case "rule":
 			return [
 				...head,

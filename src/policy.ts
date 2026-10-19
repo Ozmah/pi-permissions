@@ -28,7 +28,8 @@ export type Reason =
 	| { kind: "default"; subject: string; action: "ask" }
 	| { kind: "outside"; subject: string; action: "ask" }
 	| { kind: "inside"; subject: string; action: "allow" }
-	| { kind: "readonly"; subject: string; action: Verdict }
+	/** `why` says what keeps a read-only command from running: a path outside the project, a path rule. */
+	| { kind: "readonly"; subject: string; action: Verdict; why?: string }
 	| { kind: "note"; subject: string; action: "ask" }
 	| { kind: "skipped"; subject: string; why: string };
 
@@ -43,7 +44,7 @@ export function formatReason(r: Reason): string {
 		case "inside":
 			return `${r.subject} → read inside the project: allow`;
 		case "readonly":
-			return `${r.subject} → read-only command: ${r.action}`;
+			return `${r.subject} → read-only command${r.why ? `, ${r.why}` : ""}: ${r.action}`;
 		case "note":
 			return `${r.subject} → requires confirmation`;
 		case "skipped":
@@ -223,17 +224,30 @@ function pathHits(cfg: PermissionConfig, real: string, requested: string): RuleH
 	return hits;
 }
 
-/** A path as shown in reasons: both forms when a symlink makes them differ. */
-function pathSubject(real: string, requested: string): string {
-	return real === requested ? real : `${real} (symlink from ${requested})`;
+/**
+ * A path as shown in reasons: both forms when a symlink makes them differ. An
+ * operand that is no file may be a pattern (`grep "execute(" src`): it is still
+ * checked, and says so.
+ */
+function pathSubject(real: string, requested: string, operand = false): string {
+	const shown = real === requested ? real : `${real} (symlink from ${requested})`;
+
+	return operand && !fs.existsSync(real) ? `${shown} (no such file, checked as a path)` : shown;
 }
 
 /**
  * A path read or written. Rules decide when they match; otherwise reading inside
  * the project runs (with `readonly`) and anything else asks.
  */
-function judgePath(cfg: PermissionConfig, real: string, requested: string, project: string, read: boolean): Judgement {
-	const subject = pathSubject(real, requested);
+function judgePath(
+	cfg: PermissionConfig,
+	real: string,
+	requested: string,
+	project: string,
+	read: boolean,
+	operand = false,
+): Judgement {
+	const subject = pathSubject(real, requested, operand);
 	const hits = pathHits(cfg, real, requested);
 
 	if (hits.length) return fromRules(subject, "paths", hits);
@@ -396,6 +410,13 @@ function mentionedRules(cfg: PermissionConfig, command: string, matched: Set<str
 	return reasons;
 }
 
+/** What keeps a read-only command from running, for its reason line. */
+function readonlyWhy(verdict: Verdict, reasons: Reason[]): string | undefined {
+	if (verdict === "allow") return undefined;
+
+	return reasons.some((r) => r.kind === "rule") ? "a path rule applies" : "reads outside the project";
+}
+
 function decideBash(cfg: PermissionConfig, command: string, opts: DecideOptions): Decision {
 	const protectedPaths = opts.protectedPaths ?? [];
 	const { segments, risky } = parseShell(command);
@@ -417,7 +438,7 @@ function decideBash(cfg: PermissionConfig, command: string, opts: DecideOptions)
 		const tokens = tokenize(seg.text);
 		const cmdHits = matchRules(cfg.commands, text);
 		const ro = cfg.readonly && tokens ? readonlyPaths(tokens, wd, opts) : undefined;
-		const paths = Array.isArray(ro) ? ro.map((r) => judgePath(cfg, r.real, r.requested, opts.cwd, true)) : [];
+		const paths = Array.isArray(ro) ? ro.map((r) => judgePath(cfg, r.real, r.requested, opts.cwd, true, true)) : [];
 		const ruledPaths = paths.filter((p) => p.reasons.some((r) => r.kind === "rule"));
 		let judged: Judgement;
 
@@ -436,10 +457,18 @@ function decideBash(cfg: PermissionConfig, command: string, opts: DecideOptions)
 			};
 		} else if (Array.isArray(ro)) {
 			const verdict = strictest(...paths.map((p) => p.action));
+			const head: Reason = { kind: "readonly", subject, action: verdict };
+
+			const why = readonlyWhy(
+				verdict,
+				paths.flatMap((p) => p.reasons),
+			);
+
+			if (why) head.why = why;
 			const shown = paths.flatMap((p) => p.reasons).filter((r) => r.kind !== "inside");
 			judged = {
 				action: verdict,
-				reasons: [{ kind: "readonly", subject, action: verdict }, ...shown],
+				reasons: [head, ...shown],
 				firm: paths.some((p) => p.firm),
 			};
 		} else {

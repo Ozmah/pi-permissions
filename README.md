@@ -93,7 +93,7 @@ With `readonly` on, a segment that only reads runs when every path it reads is i
 
 - Commands: `cat`, `head`, `tail`, `wc`, `ls`, `cut`, `grep`, `egrep`, `fgrep`, `rg`, `find`, `sort`, `uniq`, `echo`, `pwd`, `cd`.
 - Flags that write, run programs or follow symlinks disqualify the segment: `find -exec/-delete/-fprint/-L`, `rg --pre/-L`, `grep -R`, `sort -o`, `tail -f`, `uniq in out`. Output redirections other than `/dev/null` or an fd disqualify it too.
-- Every operand is checked as a path, patterns included. `grep "/api" src` asks for `/api` when it is outside the project. A wrong guess can only add a prompt. Input redirections (`< file`) are checked too, and a here-document or here-string feeding a read-only command is plain input.
+- Every operand is checked as a path, patterns included. `grep "/api" src` asks for `/api` when it is outside the project. A wrong guess can only add a prompt, and the reason marks an operand that is no file as "no such file, checked as a path". Input redirections (`< file`) are checked too, and a here-document or here-string feeding a read-only command is plain input.
 - `cd` is followed: later relative paths are checked against every directory the command may be in. `cd -`, `cd $VAR`, `pushd`, `builtin`, `eval`, assignments, and `cd name` with `$CDPATH` set lose track, and later relative paths ask.
 - Variables, `~user`, subshells, brace expansion and comments are not resolved, so the segment asks. A glob is checked by its fixed directory (`src/*.ts` → `src`), and `..` after a wildcard asks.
 
@@ -118,7 +118,7 @@ Writing the permission files or the extension's own files always asks, whatever 
 
 ### stfu pi on a folder
 
-`a` ("stfu pi on <folder>/") gives every tool, bash included, total access to the folder the call works in until the session ends. `d` ("…and subfolders") covers its subfolders too. For file tools the folder is the file's. For bash it is the folder the command runs in, following its `cd`s, and no option is offered when that folder cannot be known. Tools without a path get `a` for any input.
+`a` ("stfu pi on <folder>/") gives every tool, bash included, total access to the folder the call works in until the session ends. `d` ("…and subfolders") covers its subfolders too. For file tools the folder is the file's. For bash it is the folder the command runs in, following its `cd`s. No option is offered when that folder cannot be known, or when it is your home or the root, where one stray keypress would silence everything. Tools without a path get `a` for any input.
 
 Why folders and not commands: agents today send endless one-liners, chaining `cd`, pipes and inline scripts to do something complex in a single command (blame Opus 5.5 and Sol 6.1). An exact command never comes back twice, so "always this command" was useless. Trusting a folder is the decision that actually holds, for now at least.
 

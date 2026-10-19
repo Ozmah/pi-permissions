@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- "stfu pi" is never offered for your home or the root folder. A `cd` that widened the command's folder to `~` used to offer it.
+- A read-only command that asks says why: "reads outside the project" or "a path rule applies". Operands that are no file (a `grep` pattern) are marked "no such file, checked as a path".
 - Breaking: rules now list what must not happen. They live in `commands` (bash segments), `paths` (any tool) and `tools`, and take one of four values. `halt` blocks and alerts you, `deny` blocks, `ask` asks every time even under stfu, and `yes-i-am-very-sure` runs without asking. `"allow"` is no longer accepted. Anything without a rule asks, and the strictest matching rule wins. The old keys (`default`, `external_directory`, `bash`, `readonly_commands`) are reported as an error and ignored.
 - `readonly` (default `true`): reads inside the project run without asking. That covers file tools and bash commands that only read (`cat`, `grep`, `head`, `rg`, `find`, `cd`...) when every path they read is inside the project or allowed by a path rule. Operands, `--flag=value` values and `< file` count as paths, `cd` is followed, and flags that write or run programs disqualify the command.
 - Safety net: a `halt`, `deny` or `ask` command or path that appears anywhere in a bash command (`$(sudo …)`, `bash -c "sudo …"`, `/usr/bin/sudo`, a script) asks, and stfu does not skip it.

@@ -59,11 +59,16 @@ function commonDir(dirs: string[]): string {
 	});
 }
 
-/** The folder a call works in, which is what a grant is offered for. */
-function folderOf(target: CallTarget): string | undefined {
-	if (target.absPath) return scopeDir(target.absPath);
+/** Folders too broad to silence: one stray keypress would grant the whole home or disk. */
+function tooBroad(dir: string): boolean {
+	return dir === os.homedir() || dir === path.parse(dir).root;
+}
 
-	return target.dirs?.length ? commonDir(target.dirs) : undefined;
+/** The folder a call works in, which is what a grant is offered for. Never home or the root. */
+function folderOf(target: CallTarget): string | undefined {
+	const folder = target.absPath ? scopeDir(target.absPath) : target.dirs?.length ? commonDir(target.dirs) : undefined;
+
+	return folder && !tooBroad(folder) ? folder : undefined;
 }
 
 function covers(grant: { dir: string; recursive: boolean }, p: string, isDir: boolean): boolean {
@@ -107,8 +112,8 @@ export function grantChoices(target: CallTarget): GrantChoice[] {
 	const folder = folderOf(target);
 
 	if (!folder) {
-		// bash whose directory cannot be known gets no grant; pathless tools get "any input".
-		if (target.tool === "bash") return [];
+		// No folder to offer (unknown, home or root): file tools and bash get no grant.
+		if (target.tool === "bash" || target.absPath) return [];
 		const { tool } = target;
 
 		return [{ key: "a", label: `Always: ${tool} (any input)`, grant: { kind: "tool", tool } }];
