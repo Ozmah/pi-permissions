@@ -12,6 +12,7 @@ import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-ag
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { type BodyDeps, buildBody, plainBody } from "./body.ts";
+import { describedBash } from "./describe.ts";
 import {
 	type PermissionConfig,
 	type PromptPosition,
@@ -123,6 +124,10 @@ function projectDir(ctx: ExtensionContext): string {
 }
 
 export default function (pi: ExtensionAPI) {
+	// Registered at load, from the global config only, so Pi can report a conflict
+	// with another extension that also replaces `bash`. Turning it on or off needs /reload.
+	if (loadConfig(process.cwd(), false).cfg.ui.describe_commands) pi.registerTool(describedBash(process.cwd()));
+
 	/** Grants from the "Always" options. In memory, cleared with the session. */
 	let sessionGrants: Grant[] = [];
 	/** Projects disabled with `/permissions off --session`. */

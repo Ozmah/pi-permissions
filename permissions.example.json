@@ -19,6 +19,7 @@
   "tools": {},
   "readonly": true,
   "ui": {
-    "position": "editor"
+    "position": "editor",
+    "describe_commands": false
   }
 }

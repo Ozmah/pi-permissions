@@ -47,13 +47,14 @@ Rules list what must not happen. Anything without a rule asks, and a "stfu pi" g
 }
 ```
 
-| Key           | Applies to                                                                                                |
-| ------------- | --------------------------------------------------------------------------------------------------------- |
-| `commands`    | Each segment of a bash command.                                                                           |
-| `paths`       | Paths that any tool reads or writes: file tools, and the files read-only bash commands read.              |
-| `tools`       | Tools by name: `read`, `write`, `edit`, `ls`, `find`, `grep`, MCP and extension tools.                    |
-| `readonly`    | Reads inside the project run without asking, with file tools and read-only bash commands. Default `true`. |
-| `ui.position` | `editor` (replaces the input), `center` or `top`.                                                         |
+| Key                    | Applies to                                                                                                |
+| ---------------------- | --------------------------------------------------------------------------------------------------------- |
+| `commands`             | Each segment of a bash command.                                                                           |
+| `paths`                | Paths that any tool reads or writes: file tools, and the files read-only bash commands read.              |
+| `tools`                | Tools by name: `read`, `write`, `edit`, `ls`, `find`, `grep`, MCP and extension tools.                    |
+| `readonly`             | Reads inside the project run without asking, with file tools and read-only bash commands. Default `true`. |
+| `ui.position`          | `editor` (replaces the input), `center` or `top`.                                                         |
+| `ui.describe_commands` | Asks the agent to describe each bash command in a few words, shown in the prompt. Default `false`.        |
 
 | Value                | Effect                                                                          | Skipped by stfu |
 | -------------------- | ------------------------------------------------------------------------------- | --------------- |
@@ -97,6 +98,12 @@ With `readonly` on, a segment that only reads runs when every path it reads is i
 - Every operand is checked as a path, patterns included. `grep "/api" src` asks for `/api` when it is outside the project. A wrong guess can only add a prompt, and the reason marks an operand that is no file as "no such file, checked as a path". Input redirections (`< file`) are checked too, and a here-document or here-string feeding a read-only command is plain input.
 - `cd` is followed: later relative paths are checked against every directory the command may be in. `cd -`, `cd $VAR`, `pushd`, `builtin`, `eval`, assignments, and `cd name` with `$CDPATH` set lose track, and later relative paths ask.
 - Variables, `~user`, subshells, brace expansion and comments are not resolved, so the segment asks. A glob is checked by its fixed directory (`src/*.ts` → `src`), and `..` after a wildcard asks.
+
+### Command descriptions
+
+With `"ui": { "describe_commands": true }`, the bash tool gets an optional `description` argument where the agent says what the command does, and the prompt shows it above the command as `Agent says: …`. It is the agent's claim, not something the extension checks: the command below it is what runs, and the decision ignores the description.
+
+The extension replaces Pi's `bash` registration to add the argument, so it is off by default and read from the global config only. Another extension that also replaces `bash` conflicts with it, and Pi reports the conflict. Turning it on or off needs `/reload`.
 
 ### Protected files
 

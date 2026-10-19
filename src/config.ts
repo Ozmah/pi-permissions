@@ -38,7 +38,11 @@ export interface PermissionConfig {
 	tools: RuleMap;
 	/** Reading inside the project (file tools and read-only bash commands) runs without asking. */
 	readonly: boolean;
-	ui: { position: PromptPosition };
+	ui: {
+		position: PromptPosition;
+		/** Ask the agent for a short description of each bash command, shown in the prompt. Needs /reload. */
+		describe_commands: boolean;
+	};
 }
 
 export type PartialConfig = Partial<Omit<PermissionConfig, "ui">> & { ui?: Partial<PermissionConfig["ui"]> };
@@ -98,7 +102,7 @@ export function isJsonObject(value: Json | undefined): value is JsonObject {
 }
 
 export function defaultConfig(): PermissionConfig {
-	return { commands: {}, paths: {}, tools: {}, readonly: true, ui: { position: "editor" } };
+	return { commands: {}, paths: {}, tools: {}, readonly: true, ui: { position: "editor", describe_commands: false } };
 }
 
 function invalidRule(value: Json): string {
@@ -154,11 +158,21 @@ export function parseConfig(raw: Json, source: string, errors: string[]): Partia
 
 	if (raw.ui !== undefined) {
 		if (!isJsonObject(raw.ui)) errors.push(`${source}: ui must be an object`);
-		else if (raw.ui.position !== undefined) {
-			const p = raw.ui.position;
+		else {
+			const ui: Partial<PermissionConfig["ui"]> = {};
+			const { position, describe_commands: describe } = raw.ui;
 
-			if (isPosition(p)) cfg.ui = { position: p };
-			else errors.push(`${source}: invalid ui.position ${JSON.stringify(p)} (use editor/center/top)`);
+			if (position !== undefined) {
+				if (isPosition(position)) ui.position = position;
+				else errors.push(`${source}: invalid ui.position ${JSON.stringify(position)} (use editor/center/top)`);
+			}
+
+			if (describe !== undefined) {
+				if (describe === true || describe === false) ui.describe_commands = describe;
+				else errors.push(`${source}: ui.describe_commands must be true or false`);
+			}
+
+			if (Object.keys(ui).length) cfg.ui = ui;
 		}
 	}
 
@@ -188,6 +202,8 @@ export function mergeConfigs(...layers: (PartialConfig | undefined)[]): Permissi
 		if (c.readonly !== undefined) out.readonly = c.readonly;
 
 		if (c.ui?.position) out.ui.position = c.ui.position;
+
+		if (c.ui?.describe_commands !== undefined) out.ui.describe_commands = c.ui.describe_commands;
 	}
 
 	return out;

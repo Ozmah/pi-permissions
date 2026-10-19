@@ -6,6 +6,7 @@ import { formatReason, needsDecision, type Reason } from "./policy.ts";
 import { ACTION_COLOR, type BodyLine, RULE_COLOR, type Span } from "./prompt-ui.ts";
 import { inlineScript } from "./scripts.ts";
 import { displayLines, parseShell } from "./shell.ts";
+import { DESCRIPTION_ARG } from "./describe.ts";
 import { onlySgr, sanitize } from "./text.ts";
 
 /** Returns one ANSI-colored string per input line, or undefined to fall back to plain text. */
@@ -65,7 +66,14 @@ function blockLines(code: string, lang: string | undefined, deps: BodyDeps): Bod
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 function bashBody(input: JsonObject, deps: BodyDeps): BodyLine[] {
-	const lines: BodyLine[] = [heading("Command")];
+	const lines: BodyLine[] = [];
+	const said = input[DESCRIPTION_ARG];
+
+	// The agent's own words (ui.describe_commands): a claim, shown above what actually runs.
+	if (isString(said) && said.trim())
+		lines.push({ text: said.trim(), prefix: "Agent says: ", prefixColor: "dim" }, BLANK);
+
+	lines.push(heading("Command"));
 	let first = true;
 	const analysis = parseShell(isString(input.command) ? input.command : "");
 	const texts = displayLines(analysis);
