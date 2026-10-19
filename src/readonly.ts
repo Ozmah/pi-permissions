@@ -148,8 +148,19 @@ function redirectCheck(op: string, target: Word | undefined): PathCheck | { harm
 	return pathOf(target);
 }
 
+/**
+ * GNU getopt_long accepts any unambiguous prefix of a long option, so `--o` is
+ * `--output`. A long flag whose name starts a denied `--` entry is denied too.
+ * Single-dash entries stay exact: `find` primaries are never abbreviated.
+ */
+function abbreviates(flag: string, denied: string): boolean {
+	const [name] = flag.split("=");
+
+	return denied.startsWith("--") && name.startsWith("--") && name.length > 2 && denied.startsWith(name);
+}
+
 function deniedFlag(spec: CommandSpec, flag: string): string | undefined {
-	const hit = spec.deny?.find((d) => flag === d || flag.startsWith(`${d}=`));
+	const hit = spec.deny?.find((d) => flag === d || flag.startsWith(`${d}=`) || abbreviates(flag, d));
 
 	if (hit) return hit;
 

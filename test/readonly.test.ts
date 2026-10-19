@@ -155,6 +155,13 @@ describe("analyzeReadonly", () => {
 			"tail -f log",
 			"wc --files0-from=list",
 			"uniq in out",
+			// GNU getopt_long abbreviations of denied long flags
+			"sort --o=src/index.ts x",
+			"sort --outp src/index.ts x",
+			"sort --compress-prog=sh x",
+			"grep --dereference x .",
+			"tail --fol log",
+			"wc --files0=list",
 		]) {
 			assert.equal(analyze(text)?.ok, false, text);
 		}
@@ -191,6 +198,13 @@ describe("analyzeReadonly", () => {
 		const r = analyze("sed -n first -e 5p");
 		assert.ok(r?.ok);
 		assert.deepEqual(r.paths, [{ value: "first", tilde: false }]);
+	});
+
+	it("keeps long flags that abbreviate nothing denied, and find primaries exact", () => {
+		assert.equal(analyze("sort --numeric-sort x")?.ok, true);
+		assert.equal(analyze("grep --color=auto -rn x src")?.ok, true);
+		assert.equal(analyze("tail --lines=5 log")?.ok, true);
+		assert.equal(analyze("find . -name x -del")?.ok, true, "find does not abbreviate; -del is not -delete");
 	});
 
 	it("rejects paths attached to short flags", () => {
