@@ -1,6 +1,4 @@
-/**
- * Text safety helpers. Everything shown in a prompt comes from the agent and is untrusted.
- */
+/** Everything shown in a prompt comes from the agent and is untrusted. */
 
 /**
  * Replaces control characters (including ESC) with visible placeholders so that
