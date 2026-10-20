@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `codemode` (default `false`): codemode scripts run without asking, since every tool they call is checked on its own. A prompt for one of those calls says it was called by codemode. When codemode asks, its script is shown as highlighted JavaScript instead of an escaped JSON string.
+
 ## 0.5.0
 
 The config format changed and the old one is ignored. Rules now list what must not happen (`halt`, `deny`, `ask`), anything without a rule asks, and "stfu pi" grants silence the prompts for a folder you trust. Read the Configuration section of the README before upgrading.

@@ -38,6 +38,11 @@ export interface PermissionConfig {
 	tools: RuleMap;
 	/** Reading inside the project (file tools and read-only bash commands) runs without asking. */
 	readonly: boolean;
+	/**
+	 * `codemode` runs without asking: a script can only act through the tools it
+	 * calls, and each of those calls is checked on its own. A `tools` rule wins.
+	 */
+	codemode: boolean;
 	ui: {
 		position: PromptPosition;
 		/** Ask the agent for a short description of each bash command, shown in the prompt. Needs /reload. */
@@ -102,7 +107,14 @@ export function isJsonObject(value: Json | undefined): value is JsonObject {
 }
 
 export function defaultConfig(): PermissionConfig {
-	return { commands: {}, paths: {}, tools: {}, readonly: true, ui: { position: "editor", describe_commands: false } };
+	return {
+		commands: {},
+		paths: {},
+		tools: {},
+		readonly: true,
+		codemode: false,
+		ui: { position: "editor", describe_commands: false },
+	};
 }
 
 function invalidRule(value: Json): string {
@@ -156,6 +168,11 @@ export function parseConfig(raw: Json, source: string, errors: string[]): Partia
 		else errors.push(`${source}: readonly must be true or false`);
 	}
 
+	if (raw.codemode !== undefined) {
+		if (raw.codemode === true || raw.codemode === false) cfg.codemode = raw.codemode;
+		else errors.push(`${source}: codemode must be true or false`);
+	}
+
 	if (raw.ui !== undefined) {
 		if (!isJsonObject(raw.ui)) errors.push(`${source}: ui must be an object`);
 		else {
@@ -200,6 +217,8 @@ export function mergeConfigs(...layers: (PartialConfig | undefined)[]): Permissi
 		Object.assign(out.tools, c.tools);
 
 		if (c.readonly !== undefined) out.readonly = c.readonly;
+
+		if (c.codemode !== undefined) out.codemode = c.codemode;
 
 		if (c.ui?.position) out.ui.position = c.ui.position;
 

@@ -30,6 +30,8 @@ export type Reason =
 	| { kind: "inside"; subject: string; action: "allow" }
 	/** `why` says what keeps a read-only command from running: a path outside the project, a path rule. */
 	| { kind: "readonly"; subject: string; action: Verdict; why?: string }
+	/** `codemode` with `"codemode": true`: the tools it calls are checked one by one. */
+	| { kind: "nested"; subject: string; action: "allow" }
 	| { kind: "note"; subject: string; action: "ask" }
 	| { kind: "skipped"; subject: string; why: string }
 	/** An active grant that touches the call but does not cover it; `subject` describes the grant. */
@@ -49,6 +51,8 @@ export function formatReason(r: Reason): string {
 			return `${r.subject} → read-only command${r.why ? `, ${r.why}` : ""}: ${r.action}`;
 		case "note":
 			return `${r.subject} → requires confirmation`;
+		case "nested":
+			return `${r.subject} → runs other tools, each checked on its own: allow`;
 		case "skipped":
 			return `${r.subject} → not read-only: ${r.why}`;
 		case "uncovered":
@@ -96,6 +100,9 @@ const FILE_TOOLS: ReadonlySet<string> = new Set(["read", "write", "edit", "ls", 
 const WRITE_TOOLS: ReadonlySet<string> = new Set(["write", "edit"]);
 
 const CONFIG_NAME = "permissions.json";
+
+/** Pi's script tool. It acts only through the tools it calls, which reach `tool_call` like any other call. */
+export const CODEMODE = "codemode";
 
 /** Max length of a command segment quoted inside a reason (the full command is shown separately). */
 const REASON_SNIPPET = 80;
@@ -537,6 +544,10 @@ export function decide(cfg: PermissionConfig, toolName: string, input: JsonObjec
 
 	if (!FILE_TOOLS.has(toolName)) {
 		if (toolHits.length) return withFirm({ action: tool.action, reasons: tool.reasons }, tool.firm);
+
+		if (toolName === CODEMODE && cfg.codemode) {
+			return { action: "allow", reasons: [{ kind: "nested", subject: toolName, action: "allow" }] };
+		}
 
 		return { action: "ask", reasons: [{ kind: "default", subject: toolName, action: "ask" }] };
 	}

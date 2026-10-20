@@ -53,6 +53,7 @@ Rules list what must not happen. Anything without a rule asks, and a "stfu pi" g
 | `paths`                | Paths that any tool reads or writes: file tools, and the files read-only bash commands read.              |
 | `tools`                | Tools by name: `read`, `write`, `edit`, `ls`, `find`, `grep`, MCP and extension tools.                    |
 | `readonly`             | Reads inside the project run without asking, with file tools and read-only bash commands. Default `true`. |
+| `codemode`             | `codemode` runs without asking, and every tool its script calls is checked on its own. Default `false`.   |
 | `ui.position`          | `editor` (replaces the input), `center` or `top`.                                                         |
 | `ui.describe_commands` | Asks the agent to describe each bash command in a few words, shown in the prompt. Default `false`.        |
 
@@ -98,6 +99,12 @@ With `readonly` on, a segment that only reads runs when every path it reads is i
 - Every operand is checked as a path, patterns included. `grep "/api" src` asks for `/api` when it is outside the project. A wrong guess can only add a prompt, and the reason marks an operand that is no file as "no such file, checked as a path". Input redirections (`< file`) are checked too, and a here-document or here-string feeding a read-only command is plain input.
 - `cd` is followed: later relative paths are checked against every directory the command may be in. `cd -`, `cd $VAR`, `pushd`, `builtin`, `eval`, assignments, and `cd name` with `$CDPATH` set lose track, and later relative paths ask.
 - Variables, `~user`, subshells, brace expansion and comments are not resolved, so the segment asks. A glob is checked by its fixed directory (`src/*.ts` → `src`). `..` after a wildcard asks, and so does a wildcard component that starts with a dot (`.*`, `.?`), which bash before 5.2 can expand to `..`.
+
+### codemode
+
+A `codemode` script runs JavaScript in a sandbox with no file system or network, and acts only through the tools it calls. Pi sends each of those calls through the same check as a call from the model, so with `"codemode": true` the script runs without asking and its calls ask, run or block on their own. A prompt for one of them says where it comes from: `write requires permission (called by codemode)`. A `tools` rule on `codemode` still wins.
+
+When `codemode` asks, the prompt shows the script as JavaScript, labeled and highlighted, instead of an escaped JSON string.
 
 ### Command descriptions
 
