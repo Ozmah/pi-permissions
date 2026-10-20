@@ -99,3 +99,74 @@ describe("displayLines", () => {
 		assert.equal(displayLines(analysis).length, analysis.segments.length);
 	});
 });
+
+describe("parseShell: here-documents", () => {
+	const heredocs = (cmd: string) => parseShell(cmd).segments.map((s) => s.heredocs?.map((h) => h.body));
+
+	it("keeps the body out of the segments and attaches it to its command", () => {
+		const cmd = "cd x && python3 - <<'PY'\nimport os; os.remove('a')\nx = 1 && 2\nPY\ngrep a b | head -3";
+		assert.deepEqual(texts(cmd), ["cd x", "python3 - <<'PY'", "grep a b", "head -3"]);
+		assert.deepEqual(heredocs(cmd), [undefined, ["import os; os.remove('a')\nx = 1 && 2"], undefined, undefined]);
+		assert.deepEqual(risky(cmd), []);
+	});
+
+	it("attaches the body to the segment that opened it, even inside a pipeline", () => {
+		assert.deepEqual(heredocs("cat <<EOF | grep x\nhi\nEOF"), [["hi"], undefined]);
+	});
+
+	it("reads several here-documents of one line in order", () => {
+		const cmd = "cat <<A <<B\na\nA\nb\nB\nls";
+		assert.deepEqual(texts(cmd), ["cat <<A <<B", "ls"]);
+		assert.deepEqual(heredocs(cmd)[0], ["a", "b"]);
+	});
+
+	it("strips leading tabs with <<-, also before the delimiter", () => {
+		assert.deepEqual(texts("cat <<-EOF\n\tx\n\tEOF\nls"), ["cat <<-EOF", "ls"]);
+	});
+
+	it("flags substitutions only when the body is expanded (unquoted delimiter)", () => {
+		assert.deepEqual(risky("cat <<EOF\n$(rm -rf ~)\nEOF"), ["command substitution"]);
+		assert.deepEqual(risky("cat <<EOF\n`rm -rf ~`\nEOF"), ["command substitution"]);
+		assert.deepEqual(risky("cat <<'EOF'\n$(rm -rf ~)\nEOF"), []);
+		assert.deepEqual(risky('cat <<"EOF"\n$(x)\nEOF'), []);
+		assert.deepEqual(risky("cat <<\\EOF\n$(x)\nEOF"), []);
+	});
+
+	it("flags a missing delimiter and hides nothing after it", () => {
+		const cmd = "cat <<EOF\nx\nrm -rf ~";
+		assert.deepEqual(risky(cmd), ["unclosed here-document"]);
+		assert.deepEqual(texts(cmd), ["cat <<EOF"]);
+	});
+
+	it("does not take a here-string for a here-document", () => {
+		assert.deepEqual(texts("cat <<< 'x'\nls"), ["cat <<< 'x'", "ls"]);
+		assert.deepEqual(heredocs("cat <<< 'x'\nls"), [undefined, undefined]);
+	});
+
+	it("flags << without a delimiter", () => {
+		assert.deepEqual(risky("cat << ;"), ["unsupported here-document"]);
+	});
+});
+
+describe("parseShell: comments", () => {
+	it("does not open a here-document inside a comment, so the next line stays a segment", () => {
+		const cmd = "git status # <<EOF\nrm -rf ~\nEOF";
+		assert.deepEqual(texts(cmd), ["git status # <<EOF", "rm -rf ~", "EOF"]);
+		assert.equal(parseShell(cmd).segments[0].heredocs, undefined);
+	});
+
+	it("does not open a quote inside a comment, so lines are not merged", () => {
+		const cmd = "git status # it's fine\nrm -rf ~\necho 'x'";
+		assert.deepEqual(texts(cmd), ["git status # it's fine", "rm -rf ~", "echo 'x'"]);
+		assert.deepEqual(risky(cmd), []);
+	});
+
+	it("does not split on operators inside a comment", () => {
+		assert.deepEqual(texts("ls # a && b | c\npwd"), ["ls # a && b | c", "pwd"]);
+	});
+
+	it("only takes a # that starts a word", () => {
+		assert.deepEqual(texts("echo a#b && echo $# && echo ${#x}"), ["echo a#b", "echo $#", "echo ${#x}"]);
+		assert.deepEqual(texts("ls;# c && rm x\npwd"), ["ls", "# c && rm x", "pwd"]);
+	});
+});

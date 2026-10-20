@@ -2,9 +2,11 @@
  * Builds the prompt body for a tool call. The body is unbounded; the prompt scrolls it.
  */
 import { type Json, type JsonObject, isJsonObject, isNumber, isString } from "./config.ts";
-import { formatReason, type Reason } from "./policy.ts";
-import { ACTION_COLOR, type BodyLine, type Span } from "./prompt-ui.ts";
+import { formatReason, needsDecision, type Reason } from "./policy.ts";
+import { ACTION_COLOR, type BodyLine, RULE_COLOR, type Span } from "./prompt-ui.ts";
+import { inlineScript } from "./scripts.ts";
 import { displayLines, parseShell } from "./shell.ts";
+import { DESCRIPTION_ARG } from "./describe.ts";
 import { onlySgr, sanitize } from "./text.ts";
 
 /** Returns one ANSI-colored string per input line, or undefined to fall back to plain text. */
@@ -47,11 +49,37 @@ function highlightLines(raw: string, lang: string | undefined, deps: BodyDeps): 
 	return out?.length === count ? out.map(onlySgr) : undefined;
 }
 
-function bashBody(input: JsonObject, deps: BodyDeps): BodyLine[] {
-	const lines: BodyLine[] = [heading("Command")];
-	let first = true;
+/** Lines under a command, behind a `│` margin, highlighted when the language is known. */
+function blockLines(code: string, lang: string | undefined, deps: BodyDeps): BodyLine[] {
+	const highlighted = highlightLines(code, lang, deps);
+	const rows = highlighted ?? code.split("\n");
 
-	for (const text of displayLines(parseShell(isString(input.command) ? input.command : ""))) {
+	return rows.map((text) => ({
+		text,
+		styled: highlighted !== undefined,
+		prefix: "  │ ",
+		prefixColor: "dim",
+		contPrefix: "  │   ",
+	}));
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function bashBody(input: JsonObject, deps: BodyDeps): BodyLine[] {
+	const lines: BodyLine[] = [];
+	const said = input[DESCRIPTION_ARG];
+
+	// The agent's own words (ui.describe_commands): a claim, shown above what actually runs.
+	if (isString(said) && said.trim())
+		lines.push({ text: said.trim(), prefix: "Agent says: ", prefixColor: "dim" }, BLANK);
+
+	lines.push(heading("Command"));
+	let first = true;
+	const analysis = parseShell(isString(input.command) ? input.command : "");
+	const texts = displayLines(analysis);
+
+	analysis.segments.forEach((segment, i) => {
+		const text = texts[i];
 		const highlighted = highlightLines(text, "bash", deps);
 
 		for (const piece of highlighted ?? [text]) {
@@ -64,7 +92,25 @@ function bashBody(input: JsonObject, deps: BodyDeps): BodyLine[] {
 			});
 			first = false;
 		}
-	}
+
+		// An inline script is labeled and highlighted in its language, so the decision can be read.
+		const script = inlineScript(segment);
+		const label = (code: string) => `${script?.name} script, ${plural(code.split("\n").length, "line")}`;
+
+		if (script?.from === "argument") {
+			lines.push({ text: label(script.code), color: "accent", prefix: "  ┌ ", prefixColor: "dim" });
+			lines.push(...blockLines(script.code, script.language, deps), { text: "", prefix: "  └", prefixColor: "dim" });
+		}
+
+		// Here-document bodies: data for the command, shown as a block under it.
+		segment.heredocs?.forEach((h, n) => {
+			const isScript = script?.from === "heredoc" && n === 0;
+
+			if (isScript) lines.push({ text: label(h.body), color: "accent", prefix: "  ┌ ", prefixColor: "dim" });
+			lines.push(...blockLines(h.body, isScript ? script.language : undefined, deps));
+			lines.push({ text: h.delimiter, color: "dim", prefix: "  " });
+		});
+	});
 
 	if (isNumber(input.timeout)) lines.push({ text: `timeout: ${input.timeout}s`, color: "dim" });
 
@@ -122,7 +168,6 @@ function editBody(edits: Json[], lang: string | undefined, deps: BodyDeps): Body
 
 /** Colored runs for a reason. Joined, their text equals `formatReason(r)`. */
 export function reasonSpans(r: Reason): Span[] {
-	const action: Span = { text: r.action, color: ACTION_COLOR[r.action] };
 	const muted = (text: string): Span => ({ text, color: "muted" });
 
 	const head: Span[] = [
@@ -130,26 +175,28 @@ export function reasonSpans(r: Reason): Span[] {
 		{ text: " → ", color: "dim" },
 	];
 
+	if (r.kind === "skipped") return [...head, muted(`not read-only: ${r.why}`)];
+
+	if (r.kind === "uncovered") return [...head, muted(`does not cover this call: ${r.why}`)];
+	const action: Span = { text: r.action, color: ACTION_COLOR[r.action] };
+
 	switch (r.kind) {
-		case "match":
+		case "readonly":
+			return [...head, muted(`read-only command${r.why ? `, ${r.why}` : ""}: `), action];
+		case "rule":
 			return [
 				...head,
-				muted(`matched ${r.section} `),
+				muted(`${r.section} `),
 				{ text: `"${r.pattern}"`, color: "accent" },
 				muted(": "),
-				action,
-			];
-		case "fallback":
-			return [
-				...head,
-				muted(`no matching ${r.section} rule (fallback `),
-				{ text: '"*"', color: "accent" },
-				muted(": "),
-				action,
-				muted(")"),
+				{ text: r.rule, color: RULE_COLOR[r.rule] },
 			];
 		case "default":
-			return [...head, muted(`no matching ${r.section} rule (default: `), action, muted(")")];
+			return [...head, muted("no rule: "), action];
+		case "outside":
+			return [...head, muted("outside the project, no rule: "), action];
+		case "inside":
+			return [...head, muted("read inside the project: "), action];
 		case "note":
 			return [...head, { text: "requires confirmation", color: ACTION_COLOR.ask }];
 	}
@@ -203,8 +250,17 @@ export function buildBody(
 
 	body.push(BLANK, heading("Why"));
 
-	for (const r of reasons)
+	// What needs a decision first; what is already allowed folded into one line.
+	for (const r of reasons.filter(needsDecision)) {
 		body.push({ text: formatReason(r), spans: reasonSpans(r), prefix: "• ", prefixColor: "dim" });
+	}
+
+	const allowed = reasons.filter((r) => !needsDecision(r));
+
+	if (allowed.length) {
+		const text = `${allowed.length} allowed: ${allowed.map((r) => r.subject).join(", ")}`;
+		body.push({ text, color: "dim", prefix: "✓ ", prefixColor: "success" });
+	}
 
 	return body;
 }

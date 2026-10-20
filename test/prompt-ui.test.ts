@@ -42,6 +42,8 @@ const KEY = {
 	down: "\x1b[B",
 	right: "\x1b[C",
 	left: "\x1b[D",
+	shiftUp: "\x1b[1;2A",
+	shiftDown: "\x1b[1;2B",
 	pageDown: "\x1b[6~",
 	end: "\x1b[F",
 	enter: "\r",
@@ -193,6 +195,83 @@ describe("PermissionPrompt input", () => {
 		assert.ok(p.render(70).some((r) => r.includes("line 199")));
 	});
 
+	describe("mouse clicks on options", () => {
+		// bg must be zero-width here so rendered columns match the click areas.
+		const flat: PromptTheme = { ...theme, bg: (_c, t) => t };
+
+		const open = () => {
+			let answer: { key: string; text?: string } | undefined;
+
+			const p = new PermissionPrompt(
+				tui(30),
+				flat,
+				"t",
+				[{ text: "x" }],
+				{ maxHeightRatio: 0.85, choices: ALWAYS },
+				(key, text) => {
+					answer = { key, text };
+				},
+			);
+
+			return { p, answer: () => answer };
+		};
+
+		/** Press and click at the middle of option `key`, as rendered at `width`. */
+		const clickOption = (p: PermissionPrompt, key: string, width: number) => {
+			const rows = p.render(width);
+			const y = rows.findIndex((r) => r.includes(`[${key}]`));
+			assert.ok(y >= 0, `[${key}] is rendered`);
+			const x = visibleWidth(rows[y].slice(0, rows[y].indexOf(`[${key}]`))) + 1;
+			const at = { ...wheel(0), button: "left" as const, x, y };
+			const pressed = p.handleMouse({ ...at, type: "press" });
+			const clicked = p.handleMouse({ ...at, type: "click", clickCount: 1 });
+
+			return { pressed, clicked };
+		};
+
+		for (const width of [120, 40]) {
+			it(`selects on the first click and confirms on the second (${width} columns)`, () => {
+				const { p, answer } = open();
+				const first = clickOption(p, "a", width);
+				assert.deepEqual(first.pressed, { handled: true }, "the press is taken, so the click follows");
+				assert.equal(answer(), undefined, "one click only selects");
+				clickOption(p, "a", width);
+				assert.deepEqual(answer(), { key: "a", text: undefined });
+			});
+		}
+
+		it("never approves with a single click on the default Yes", () => {
+			const { p, answer } = open();
+			clickOption(p, "y", 120);
+			assert.equal(answer(), undefined);
+		});
+
+		it("needs two clicks again after the keyboard moves the selection", () => {
+			const { p, answer } = open();
+			clickOption(p, "n", 120);
+			p.handleInput(KEY.right);
+			p.handleInput(KEY.left); // back on No
+			clickOption(p, "n", 120);
+			assert.equal(answer(), undefined);
+		});
+
+		it("opens the input on the second click of m", () => {
+			const { p, answer } = open();
+			clickOption(p, "m", 120);
+			clickOption(p, "m", 120);
+			assert.equal(answer(), undefined);
+			assert.ok(p.render(120).some((r) => r.includes("Message:")));
+		});
+
+		it("ignores clicks outside the options and on other buttons", () => {
+			const { p } = open();
+			p.render(120);
+			assert.equal(p.handleMouse({ ...wheel(0), type: "click", button: "left", x: 5, y: 1 }), undefined);
+			const y = p.render(120).findIndex((r) => r.includes("[y]"));
+			assert.equal(p.handleMouse({ ...wheel(0), type: "click", button: "right", x: 4, y }), undefined);
+		});
+	});
+
 	it("scrolls with the mouse wheel", () => {
 		const { p } = prompt(200);
 		p.render(70);
@@ -208,6 +287,7 @@ describe("PermissionPrompt input", () => {
 
 	it("moves the selection with arrows", () => {
 		const { p, result } = prompt(3);
+		p.handleInput(KEY.right); // Yes, with a message
 		p.handleInput(KEY.right); // No
 		p.handleInput(KEY.right); // No, tell pi
 		p.handleInput(KEY.right); // Always
@@ -229,6 +309,7 @@ describe("PermissionPrompt input", () => {
 		const { p, result } = prompt(200);
 		const rows = p.render(40);
 		assert.ok(rows.some((r) => r.includes("↑↓ select")));
+		p.handleInput(KEY.down); // Yes, with a message
 		p.handleInput(KEY.down); // No
 		p.handleInput(KEY.down); // No, tell pi
 		p.handleInput(KEY.down); // Always
@@ -237,6 +318,18 @@ describe("PermissionPrompt input", () => {
 		p.handleInput(KEY.up); // No
 		p.handleInput(KEY.enter);
 		assert.equal(result(), "n");
+	});
+
+	it("scrolls with Shift+↑↓ when the options are stacked", () => {
+		const { p, result } = prompt(200);
+		assert.ok(p.render(40).some((r) => r.includes("⇧↑↓ scroll")));
+		p.handleInput(KEY.shiftDown);
+		p.handleInput(KEY.shiftDown);
+		assert.ok(p.render(40)[1].includes("line 2"));
+		p.handleInput(KEY.shiftUp);
+		assert.ok(p.render(40)[1].includes("line 1"));
+		p.handleInput(KEY.enter);
+		assert.equal(result(), "y", "the selection did not move");
 	});
 
 	it("answers directly with y / n / a", () => {
@@ -267,6 +360,48 @@ describe("buildBody", () => {
 		assert.deepEqual(body, ["Command", "a", "&& b", "| c", "", "Why", formatReason(reason)]);
 	});
 
+	it("shows a here-document body as a block under its command", () => {
+		const body = buildBody("bash", { command: "cat <<'EOF'\nhello\nEOF\nls" }, undefined, []);
+		const block = body.map((l) => `${l.prefix ?? ""}${l.text}`);
+		assert.deepEqual(block.slice(0, 5), ["Command", "$ cat <<'EOF'", "  │ hello", "  EOF", "  ls"]);
+	});
+
+	it("labels an inline script and highlights it in its language", () => {
+		const langs: string[] = [];
+
+		const highlight = (code: string, lang: string) => {
+			langs.push(lang);
+
+			return code.split("\n");
+		};
+
+		const body = buildBody("bash", { command: "python3 - <<'PY'\nimport os\nprint(1)\nPY" }, undefined, [], {
+			highlight,
+		});
+
+		const block = body.map((l) => `${l.prefix ?? ""}${l.text}`);
+		const script = ["$ python3 - <<'PY'", "  ┌ Python script, 2 lines", "  │ import os", "  │ print(1)", "  PY"];
+		assert.deepEqual(block.slice(1, 6), script);
+		assert.ok(langs.includes("python"));
+	});
+
+	it("shows -c code as a labeled block", () => {
+		const body = buildBody("bash", { command: `python3 -c "print(1)"` }, undefined, []);
+		const block = body.map((l) => `${l.prefix ?? ""}${l.text}`);
+		assert.deepEqual(block.slice(2, 5), ["  ┌ Python script, 1 line", "  │ print(1)", "  └"]);
+	});
+
+	it("lists what needs a decision, then folds what is allowed into one line", () => {
+		const reasons: Reason[] = [
+			{ kind: "readonly", subject: '"cd x"', action: "allow" },
+			{ kind: "default", subject: '"python3 -"', action: "ask" },
+			{ kind: "readonly", subject: '"grep a b"', action: "allow" },
+		];
+
+		const why = texts(buildBody("bash", { command: "x" }, undefined, reasons)).slice(-2);
+		assert.deepEqual(why, [formatReason(reasons[1]), `2 allowed: "cd x", "grep a b"`]);
+	});
+
 	it("shows an edit as a diff", () => {
 		const body = buildBody("edit", { path: "x", edits: [{ oldText: "a", newText: "b" }] }, "/p/x", []);
 		const diff = body.filter((l) => l.prefix === "- " || l.prefix === "+ ").map((l) => `${l.prefix}${l.text}`);
@@ -284,10 +419,19 @@ describe("buildBody", () => {
 
 describe("reasonSpans", () => {
 	const reasons: Reason[] = [
-		{ kind: "match", subject: '"git status"', section: "bash", pattern: "git status *", action: "allow" },
-		{ kind: "fallback", subject: '"ls -la"', section: "bash", action: "ask" },
-		{ kind: "default", subject: "mcp__x", section: "tools", action: "deny" },
+		{
+			kind: "rule",
+			subject: '"git status"',
+			section: "commands",
+			pattern: "git status *",
+			rule: "yes-i-am-very-sure",
+			action: "allow",
+		},
+		{ kind: "default", subject: '"ls -la"', action: "ask" },
+		{ kind: "rule", subject: '"sudo x"', section: "commands", pattern: "sudo *", rule: "halt", action: "halt" },
 		{ kind: "note", subject: "contains redirection to file", action: "ask" },
+		{ kind: "outside", subject: "/etc/hosts", action: "ask" },
+		{ kind: "inside", subject: "/p/a.ts", action: "allow" },
 	];
 
 	it("joins to exactly the plain text the model receives", () => {
@@ -300,23 +444,17 @@ describe("reasonSpans", () => {
 			);
 	});
 
-	it("colors the action by meaning and highlights the pattern", () => {
+	it("colors the rule by meaning and highlights the pattern", () => {
 		const color = (r: Reason, text: string) => reasonSpans(r).find((s) => s.text === text)?.color;
-		assert.equal(color(reasons[0], "allow"), "success");
+		assert.equal(color(reasons[0], "yes-i-am-very-sure"), "warning");
 		assert.equal(color(reasons[0], '"git status *"'), "accent");
 		assert.equal(color(reasons[1], "ask"), "warning");
-		assert.equal(color(reasons[1], '"*"'), "accent");
-		assert.equal(color(reasons[2], "deny"), "error");
+		assert.equal(color(reasons[2], "halt"), "error");
 		assert.equal(color(reasons[3], "contains redirection to file"), "warning");
 	});
 
 	it("renders colored reasons within the width and sanitizes them", () => {
-		const evil: Reason = {
-			kind: "fallback",
-			subject: `"echo \x1b[2J ${"x".repeat(80)}"`,
-			section: "bash",
-			action: "ask",
-		};
+		const evil: Reason = { kind: "default", subject: `"echo \x1b[2J ${"x".repeat(80)}"`, action: "ask" };
 
 		const colorTheme: PromptTheme = { fg: (_c, t) => `\x1b[33m${t}\x1b[0m`, bg: (_c, t) => t, bold: (t) => t };
 		const body = buildBody("bash", { command: "ls" }, undefined, [evil]);
@@ -473,6 +611,30 @@ describe("PermissionPrompt: tell pi what to do", () => {
 		type(p, "   ");
 		p.handleInput(KEY.enter);
 		assert.deepEqual(result(), { key: "n", text: undefined });
+	});
+
+	it("offers Yes, with a message, right after Yes", () => {
+		const { p } = open();
+		const row = p.render(120).find((r) => r.includes("[y] Yes")) ?? "";
+		assert.ok(row.indexOf("[y] Yes") < row.indexOf("[m] Yes, with a message"));
+		assert.ok(row.indexOf("[m] Yes, with a message") < row.indexOf("[n] No"));
+	});
+
+	it("opens the message input with m and sends the typed text", () => {
+		const { p, result } = open();
+		p.handleInput("m");
+		assert.equal(result(), undefined);
+		assert.ok(p.render(80).some((r) => r.includes("Message:")));
+		type(p, "also run the tests");
+		p.handleInput(KEY.enter);
+		assert.deepEqual(result(), { key: "m", text: "also run the tests" });
+	});
+
+	it("treats an empty message as a plain Yes", () => {
+		const { p, result } = open();
+		p.handleInput("m");
+		p.handleInput(KEY.enter);
+		assert.deepEqual(result(), { key: "y", text: undefined });
 	});
 
 	it("keeps every row within the width while typing", () => {

@@ -12,22 +12,29 @@ const home = os.homedir();
 const base: Summary = {
 	dir: path.join(home, "dev"),
 	files: [path.join(home, ".pi", "agent", "permissions.json")],
-	default: "ask",
 	position: "editor",
-	tools: { read: "allow", edit: "ask" },
-	external_directory: {},
-	bash: { "git status *": "allow", "sudo *": "deny" },
+	commands: { "git status *": "yes-i-am-very-sure", "git push *": "ask", "sudo *": "halt" },
+	paths: { "~/.ssh/**": "deny" },
+	tools: {},
+	readonly: true,
 	grants: [],
 	disabled: [],
 	errors: [],
 };
 
 describe("renderSummary", () => {
-	it("colors actions by meaning", () => {
+	it("colors rules by meaning, the allow phrase as a warning", () => {
 		const text = renderSummary(base, theme).join("\n");
-		assert.ok(text.includes("<success:allow>"));
-		assert.ok(text.includes("<warning:ask>"));
+		assert.ok(text.includes("<warning:yes-i-am-very-sure>"));
+		assert.ok(text.includes("<accent:ask>"));
 		assert.ok(text.includes("<error:deny>"));
+		assert.ok(text.includes("<error:halt>"));
+	});
+
+	it("states that anything without a rule asks, and whether reads run", () => {
+		const text = renderSummary(base, plain).join("\n");
+		assert.ok(text.includes("No rule   asks"));
+		assert.ok(text.includes("Read-only on, reading inside the project runs"));
 	});
 
 	it("shows the on/off status", () => {
@@ -44,19 +51,19 @@ describe("renderSummary", () => {
 
 	it("aligns rule actions in a column", () => {
 		const lines = renderSummary(base, plain);
-		const bash = lines.filter((l) => l.startsWith("  git status *") || l.startsWith("  sudo *"));
-		assert.equal(bash.length, 2);
-		assert.equal(bash[0].indexOf("allow"), bash[1].indexOf("deny"));
+		const rules = lines.filter((l) => l.startsWith("  git status *") || l.startsWith("  sudo *"));
+		assert.equal(rules.length, 2);
+		assert.equal(rules[0].indexOf("yes-i-am-very-sure"), rules[1].indexOf("halt"));
 	});
 
 	it("says none for empty sections and warns when no config file exists", () => {
 		const text = renderSummary({ ...base, files: [] }, plain).join("\n");
-		assert.ok(text.includes("External directories\n  none"));
-		assert.ok(text.includes("none, everything asks"));
+		assert.ok(text.includes("Tool rules\n  none"));
+		assert.ok(text.includes("none, defaults apply"));
 	});
 
 	it("neutralizes control characters from config values", () => {
-		const text = renderSummary({ ...base, bash: { "evil\x1b[2J *": "allow" } }, plain).join("\n");
+		const text = renderSummary({ ...base, commands: { "evil\x1b[2J *": "deny" } }, plain).join("\n");
 		assert.ok(!text.includes("\x1b"));
 		assert.ok(text.includes("evil\u241b[2J *"));
 	});

@@ -12,6 +12,7 @@ import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-ag
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { type BodyDeps, buildBody, plainBody } from "./body.ts";
+import { describedBash } from "./describe.ts";
 import {
 	type PermissionConfig,
 	type PromptPosition,
@@ -23,9 +24,18 @@ import {
 	readConfigFile,
 } from "./config.ts";
 import { type MarkdownTheme, highlightMarkdown } from "./markdown.ts";
-import { decide, formatReason, resolvePath } from "./policy.ts";
-import { type CallTarget, type Grant, type GrantChoice, describeGrant, grantChoices, grantMatches } from "./grants.ts";
-import { type BodyLine, NO, PermissionPrompt, TELL, YES } from "./prompt-ui.ts";
+import { type Reason, decide, formatReason, needsDecision, resolvePath } from "./policy.ts";
+import {
+	type CallTarget,
+	type Grant,
+	type GrantChoice,
+	describeGrant,
+	grantChoices,
+	grantMatches,
+	shortPath,
+	whyNotCovered,
+} from "./grants.ts";
+import { BASE_CHOICES, type BodyLine, MESSAGE, NO, PermissionPrompt, TELL, inputSpec } from "./prompt-ui.ts";
 import { readState, setDisabled, writeState } from "./state.ts";
 import { COMMANDS, SUMMARY_ENTRY, type Summary, renderSummary } from "./summary.ts";
 import { sanitize } from "./text.ts";
@@ -42,13 +52,23 @@ const EXTENSION_ROOT = packageRoot();
 const FALLBACK_MAX_LINES = 40;
 
 const STATUS_KEY = "permissions";
+
+/** Separate from STATUS_KEY: "stfu" grants and "off" can show at the same time. */
+const STFU_STATUS_KEY = "permissions-stfu";
+
 const UNINSPECTABLE = "pi-permissions could not inspect this tool call: its input is not JSON.";
+
+const HALTED_REASON =
+	"Halted: the user's permission config sets this to halt, and the user has been alerted. Do not retry it or work around it.";
+
 const DENIED_REASON = "The user denied this action. Do not retry it; ask the user how to proceed.";
+
+const approvedMessage = (text: string) => `The user approved this tool call and added a message:\n${text}`;
 
 const toldReason = (text: string) =>
 	`The user denied this action and gave instructions instead:\n${text}\nFollow these instructions instead of retrying the same action.`;
 
-const USAGE = "Usage: /permissions [reset | off [--session] | on]";
+const USAGE = "Usage: /permissions [reset | stfu [folder] | off [--session] | on]";
 
 /** Pi's highlighter for code; Markdown uses Pi's `md*` colors, with fenced blocks back to Pi's highlighter. */
 function bodyDeps(theme: MarkdownTheme): BodyDeps {
@@ -104,6 +124,10 @@ function projectDir(ctx: ExtensionContext): string {
 }
 
 export default function (pi: ExtensionAPI) {
+	// Registered at load, from the global config only, so Pi can report a conflict
+	// with another extension that also replaces `bash`. Turning it on or off needs /reload.
+	if (loadConfig(process.cwd(), false).cfg.ui.describe_commands) pi.registerTool(describedBash(process.cwd()));
+
 	/** Grants from the "Always" options. In memory, cleared with the session. */
 	let sessionGrants: Grant[] = [];
 	/** Projects disabled with `/permissions off --session`. */
@@ -131,6 +155,18 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setStatus(STATUS_KEY, mode ? ctx.ui.theme.fg("warning", label) : undefined);
 	}
 
+	/** Folders under "stfu pi", always on screen so a grant given hours ago is not forgotten. */
+	function updateStfuStatus(ctx: ExtensionContext): void {
+		if (!ctx.hasUI) return;
+
+		const folders = sessionGrants.flatMap((g) =>
+			g.kind === "access" ? [`${shortPath(g.dir)}/${g.recursive ? "**" : ""}`] : [],
+		);
+
+		const label = `🤫 stfu pi on ${folders.join(", ")}`;
+		ctx.ui.setStatus(STFU_STATUS_KEY, folders.length ? ctx.ui.theme.fg("warning", label) : undefined);
+	}
+
 	// The /permissions card: kept in the transcript, never sent to the model.
 	pi.registerEntryRenderer<Summary>(SUMMARY_ENTRY, (entry, _options, theme) => {
 		if (!entry.data) return undefined;
@@ -140,13 +176,34 @@ export default function (pi: ExtensionAPI) {
 		return box;
 	});
 
+	/** Messages from "Yes, with a message", by tool call id, until the call's result arrives. */
+	const messages = new Map<string, string>();
+
 	pi.on("session_start", async (_event, ctx) => {
 		sessionGrants = [];
+		messages.clear();
 		sessionOff.clear();
 		const errors: string[] = [];
 		updateStatus(ctx, offMode(projectDir(ctx), errors));
+		updateStfuStatus(ctx);
 		notifyErrors(ctx, errors);
 	});
+
+	pi.on("tool_result", (event) => {
+		const text = messages.get(event.toolCallId);
+
+		if (text === undefined) return undefined;
+		messages.delete(event.toolCallId);
+
+		// Replacing content drops structuredContent unless it is passed along.
+		return {
+			content: [...event.content, { type: "text", text: approvedMessage(text) }],
+			structuredContent: event.structuredContent,
+		};
+	});
+
+	// A call blocked after approval (e.g. by another extension) never reaches tool_result.
+	pi.on("agent_end", () => messages.clear());
 
 	pi.on("tool_call", async (event, ctx) => {
 		const cwd = projectDir(ctx);
@@ -173,11 +230,23 @@ export default function (pi: ExtensionAPI) {
 		const protectedPaths = [GLOBAL_CONFIG, STATE_FILE, path.join(cwd, PROJECT_CONFIG)];
 
 		if (EXTENSION_ROOT) protectedPaths.push(EXTENSION_ROOT);
-		const d = decide(cfg, event.toolName, input, { cwd, protectedPaths });
+		const d = decide(cfg, event.toolName, input, { cwd, protectedPaths, cdpath: process.env.CDPATH });
 
 		if (d.action === "allow") return undefined;
 
-		const why = d.reasons.map(formatReason).join("\n");
+		// Only what was not allowed: the agent needs to know which part was refused, not what passed.
+		const why = d.reasons.filter(needsDecision).map(formatReason).join("\n");
+
+		if (d.action === "halt") {
+			// A deny the user wants to hear about: something tried what the config says must never run.
+			if (ctx.hasUI)
+				ctx.ui.notify(
+					sanitize(`🛑 Halted: ${event.toolName} tried something set to halt in your permissions config\n${why}`),
+					"error",
+				);
+
+			return { block: true, reason: `${HALTED_REASON}\n${why}` };
+		}
 
 		if (d.action === "deny") {
 			if (ctx.hasUI) ctx.ui.notify(sanitize(`⛔ Blocked: ${event.toolName}\n${why}`), "warning");
@@ -185,22 +254,46 @@ export default function (pi: ExtensionAPI) {
 			return { block: true, reason: `Blocked by permission policy:\n${why}` };
 		}
 
-		const target: CallTarget = { tool: event.toolName, input, absPath: d.absPath, protected: d.protected };
+		const target: CallTarget = {
+			tool: event.toolName,
+			input,
+			absPath: d.absPath,
+			dirs: d.workingDirs,
+			firm: d.firm,
+		};
 
 		if (sessionGrants.some((g) => grantMatches(g, target))) return undefined;
 
 		if (!ctx.hasUI) return { block: true, reason: `Requires confirmation but no UI is available:\n${why}` };
 
-		const body = buildBody(event.toolName, input, d.absPath, d.reasons, bodyDeps(ctx.ui.theme), d.requestedPath);
+		// An active grant that touches this call but does not cover it is said first: it explains why it still asks.
+		const uncovered: Reason[] = sessionGrants.flatMap((g) => {
+			const reason = whyNotCovered(g, target);
+
+			return reason ? [{ kind: "uncovered", subject: describeGrant(g), why: reason }] : [];
+		});
+
+		const reasons = [...uncovered, ...d.reasons];
+		const body = buildBody(event.toolName, input, d.absPath, reasons, bodyDeps(ctx.ui.theme), d.requestedPath);
 		const choices = grantChoices(target);
 		const choice = await ask(ctx, `🔐 ${event.toolName} requires permission`, body, cfg.ui.position, choices);
 
 		if (choice.key === NO.key) return { block: true, reason: DENIED_REASON };
 
 		if (choice.key === TELL.key) return { block: true, reason: toldReason(choice.text ?? "") };
+
+		if (choice.key === MESSAGE.key) {
+			if (choice.text) messages.set(event.toolCallId, choice.text);
+
+			return undefined;
+		}
+
 		const granted = choices.find((c) => c.key === choice.key)?.grant;
 
-		if (granted) sessionGrants.push(granted);
+		if (granted) {
+			sessionGrants.push(granted);
+			updateStfuStatus(ctx);
+		}
 
 		return undefined;
 	});
@@ -236,6 +329,40 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.notify(`pi-permissions enabled for ${dir}`, "info");
 	}
 
+	/**
+	 * Removes session grants: the ones on `folder` when given (`~` and the
+	 * shortened `…/` form are accepted), otherwise the one picked from a list.
+	 */
+	async function revoke(ctx: ExtensionContext, folder: string, cwd: string): Promise<void> {
+		if (!sessionGrants.length) {
+			ctx.ui.notify("No session grants", "info");
+
+			return;
+		}
+
+		let removed: Grant[];
+
+		if (folder) {
+			const wanted = resolvePath(folder, cwd);
+			removed = sessionGrants.filter((g) => g.kind === "access" && (g.dir === wanted || shortPath(g.dir) === folder));
+		} else {
+			const labels = sessionGrants.map((g) => sanitize(describeGrant(g)));
+			const picked = await ctx.ui.select("Remove a session grant", labels);
+			const grant = sessionGrants[labels.indexOf(picked ?? "")];
+			removed = grant ? [grant] : [];
+		}
+
+		if (!removed.length) {
+			if (folder) ctx.ui.notify(sanitize(`No session grant on ${folder}`), "warning");
+
+			return;
+		}
+
+		sessionGrants = sessionGrants.filter((g) => !removed.includes(g));
+		updateStfuStatus(ctx);
+		ctx.ui.notify(sanitize(`Removed: ${removed.map(describeGrant).join(", ")}`), "info");
+	}
+
 	function show(ctx: ExtensionContext, dir: string): void {
 		const errors: string[] = [];
 		const off = offMode(dir, errors);
@@ -246,11 +373,11 @@ export default function (pi: ExtensionAPI) {
 			dir,
 			off,
 			files,
-			default: cfg.default,
 			position: cfg.ui.position,
+			commands: cfg.commands,
+			paths: cfg.paths,
 			tools: cfg.tools,
-			external_directory: cfg.external_directory,
-			bash: cfg.bash,
+			readonly: cfg.readonly,
 			grants: sessionGrants.map(describeGrant),
 			disabled,
 			errors: [...errors, ...configErrors],
@@ -261,12 +388,23 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerCommand("permissions", {
 		description: "Show permission config; reset grants; turn off/on for this project",
-		getArgumentCompletions: (prefix) =>
-			COMMANDS.filter((c) => c.args && c.args.startsWith(prefix.trim())).map((c) => ({
-				value: c.args,
-				label: c.args,
-				description: c.description,
-			})),
+		getArgumentCompletions: (prefix) => {
+			const typed = prefix.trim();
+			const options = COMMANDS.flatMap((c) => (c.args ? [{ value: c.args, description: c.description }] : []));
+
+			// `stfu <folder>`: complete with the folders that have a grant.
+			for (const g of sessionGrants) {
+				const value = g.kind === "access" ? `stfu ${shortPath(g.dir)}` : undefined;
+
+				if (value && !options.some((o) => o.value === value)) {
+					options.push({ value, description: "Remove the grants on this folder" });
+				}
+			}
+
+			return options.flatMap((o) =>
+				o.value.startsWith(typed) ? [{ value: o.value, label: o.value, description: o.description }] : [],
+			);
+		},
 		handler: async (args, ctx) => {
 			const dir = projectDir(ctx);
 			const [sub = "", ...flags] = args.trim().split(/\s+/).filter(Boolean);
@@ -275,7 +413,10 @@ export default function (pi: ExtensionAPI) {
 				if (sub === "" && flags.length === 0) show(ctx, dir);
 				else if (sub === "reset" && flags.length === 0) {
 					sessionGrants = [];
+					updateStfuStatus(ctx);
 					ctx.ui.notify("Session grants cleared", "info");
+				} else if (sub === "stfu") {
+					await revoke(ctx, flags.join(" "), dir);
 				} else if (sub === "off" && (flags.length === 0 || (flags.length === 1 && flags[0] === "--session"))) {
 					await turnOff(ctx, dir, flags.length === 1);
 				} else if (sub === "on" && flags.length === 0) turnOn(ctx, dir);
@@ -302,7 +443,7 @@ const LAYOUTS = {
 	},
 } as const;
 
-/** The chosen option's key (`YES.key`, `NO.key`, `TELL.key` or a grant's key), plus the text for TELL. */
+/** The chosen option's key (a base choice or a grant's key), plus the text for MESSAGE and TELL. */
 interface Answer {
 	key: string;
 	text?: string;
@@ -318,15 +459,19 @@ async function ask(
 	choices: GrantChoice[],
 ): Promise<Answer> {
 	if (ctx.mode !== "tui") {
-		const options = [YES, NO, TELL, ...choices];
+		const options = [...BASE_CHOICES, ...choices];
 		const labels = options.map((o) => sanitize(o.label));
 		const picked = await ctx.ui.select(sanitize(`${title}\n\n${plainBody(body, FALLBACK_MAX_LINES)}`), labels);
 		const key = options[labels.indexOf(picked ?? "")]?.key ?? NO.key;
+		const spec = inputSpec(key);
 
-		if (key !== TELL.key) return { key };
-		const text = (await ctx.ui.input("Tell pi what to do instead", "what should pi do instead?"))?.trim();
+		if (!spec) return { key };
+		const text = (await ctx.ui.input(spec.title, spec.placeholder))?.trim();
 
-		return text ? { key, text } : DENY;
+		// A dismissed input (undefined) is a denial; empty text is the plain answer.
+		if (text === undefined) return DENY;
+
+		return text ? { key, text } : { key: spec.empty };
 	}
 
 	const signal = ctx.signal;

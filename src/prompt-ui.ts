@@ -19,17 +19,52 @@ export interface PromptChoice {
 export const YES: PromptChoice = { key: "y", label: "Yes" };
 export const NO: PromptChoice = { key: "n", label: "No" };
 
+/** Approves and opens a one-line input; the text is appended to the tool result. */
+export const MESSAGE: PromptChoice = { key: "m", label: "Yes, with a message" };
+
 /** Denies and opens a one-line input; the prompt resolves with the typed text. */
 export const TELL: PromptChoice = { key: "t", label: "No, tell pi what to do" };
+
+/** The fixed options, before the "always" grants. */
+export const BASE_CHOICES: readonly PromptChoice[] = [YES, MESSAGE, NO, TELL];
+
+/** Options that open the input, with its placeholder and what an empty submit means. */
+export function inputSpec(key: string): InputSpec | undefined {
+	if (key === MESSAGE.key)
+		return { title: "Message for pi", placeholder: "message for pi (the call runs)", empty: YES.key };
+
+	if (key === TELL.key)
+		return { title: "Tell pi what to do instead", placeholder: "what should pi do instead?", empty: NO.key };
+
+	return undefined;
+}
+
+export interface InputSpec {
+	/** Dialog title in non-TUI modes. */
+	title: string;
+	placeholder: string;
+	/** The answer when the text is empty. */
+	empty: string;
+}
 
 /** The subset of Pi's Theme the prompt uses. */
 export type PromptTheme = Pick<Theme, "fg" | "bg" | "bold">;
 
 /** Theme color for each action, shared by the prompt and the summary card. */
-export const ACTION_COLOR = { allow: "success", ask: "warning", deny: "error" } as const satisfies Record<
-	string,
-	ThemeColor
->;
+export const ACTION_COLOR = {
+	allow: "success",
+	ask: "warning",
+	deny: "error",
+	halt: "error",
+} as const satisfies Record<string, ThemeColor>;
+
+/** Theme color for each rule value as written in the config. The allow phrase is a warning: it is the dangerous one. */
+export const RULE_COLOR = {
+	"yes-i-am-very-sure": "warning",
+	ask: "accent",
+	deny: "error",
+	halt: "error",
+} as const satisfies Record<string, ThemeColor>;
 
 /** A run of text with its own color. Text is sanitized when rendered. */
 export interface Span {
@@ -66,6 +101,20 @@ export interface PromptOptions {
 
 /** Fixed rows besides the options: top border, separator, hint, bottom border. */
 const FRAME_ROWS = 4;
+
+/** Column where row content starts, after the `│ ` border. */
+const CONTENT_COL = 2;
+
+/** Between options when they share a row. */
+const OPTION_GAP = "  ";
+
+/** An option's clickable area: row and column range [start, end). */
+interface OptionHit {
+	index: number;
+	row: number;
+	start: number;
+	end: number;
+}
 
 /** Smallest body height worth showing. */
 const MIN_BODY_ROWS = 3;
@@ -126,6 +175,10 @@ export class PermissionPrompt implements Component, Focusable {
 	private bodyHeight = 1;
 	/** Options were rendered one per row: ↑↓ select instead of scrolling. */
 	private stacked = false;
+	/** Where each option was last drawn, in component coordinates, for mouse clicks. */
+	private hits: OptionHit[] = [];
+	/** The option a first click selected; a second click on it confirms. */
+	private armed: number | undefined;
 	private wrapCache: { width: number; rows: string[] } | undefined;
 	private readonly tui: PromptHost;
 	private readonly theme: PromptTheme;
@@ -134,8 +187,10 @@ export class PermissionPrompt implements Component, Focusable {
 	private readonly maxHeightRatio: number;
 	private readonly choices: PromptChoice[];
 	private readonly done: (key: string, text?: string) => void;
-	/** The "tell pi" input while it is open. */
+	/** The message / "tell pi" input while it is open. */
 	private input: Input | undefined;
+	/** The option that opened the input. */
+	private inputKey = TELL.key;
 	private isFocused = false;
 
 	constructor(
@@ -151,7 +206,7 @@ export class PermissionPrompt implements Component, Focusable {
 		this.title = title;
 		this.body = body;
 		this.maxHeightRatio = options.maxHeightRatio;
-		this.choices = [YES, NO, TELL, ...options.choices];
+		this.choices = [...BASE_CHOICES, ...options.choices];
 		this.done = done;
 	}
 
@@ -166,27 +221,51 @@ export class PermissionPrompt implements Component, Focusable {
 		if (this.input) this.input.focused = value;
 	}
 
-	private openInput(): void {
-		const input = new Input({ placeholder: "what should pi do instead?" });
+	private openInput(key: string, spec: InputSpec): void {
+		const input = new Input({ placeholder: spec.placeholder });
 		input.focused = this.isFocused;
-		// Empty text is a plain No.
-		input.onSubmit = (value) => (value.trim() ? this.done(TELL.key, value.trim()) : this.done(NO.key));
+		// Empty text is the plain answer: Yes for a message, No for tell.
+		input.onSubmit = (value) => (value.trim() ? this.done(key, value.trim()) : this.done(spec.empty));
 		this.input = input;
+		this.inputKey = key;
 		this.tui.requestRender();
 	}
 
 	private closeInput(): void {
 		this.input = undefined;
+		this.armed = undefined;
 		this.tui.requestRender();
 	}
 
 	/** The input row, padded to the inner width (not truncated: it carries the cursor marker). */
 	private inputRow(input: Input, inner: number): string {
-		const label = this.theme.fg("accent", "Tell pi: ");
+		const label = this.theme.fg("accent", this.inputKey === MESSAGE.key ? "Message: " : "Tell pi: ");
 		const field = input.render(Math.max(1, inner - visibleWidth(label)))[0] ?? "";
 		const content = label + field;
 
 		return content + " ".repeat(Math.max(0, inner - visibleWidth(content)));
+	}
+
+	/** An option's text before styling. Labels can contain agent-provided paths, hence sanitize. */
+	private static plainLabel(c: PromptChoice): string {
+		return ` [${c.key}] ${sanitize(c.label)} `;
+	}
+
+	/** Mirrors `optionRows`: one row with OPTION_GAP between labels, or one per row. */
+	private optionHits(firstRow: number, inner: number): OptionHit[] {
+		const right = CONTENT_COL + inner; // labels past the inner width are truncated
+		let col = CONTENT_COL;
+
+		return this.choices.map((c, index) => {
+			const width = visibleWidth(PermissionPrompt.plainLabel(c));
+
+			if (this.stacked)
+				return { index, row: firstRow + index, start: CONTENT_COL, end: Math.min(right, CONTENT_COL + width) };
+			const hit = { index, row: firstRow, start: col, end: Math.min(right, col + width) };
+			col += width + OPTION_GAP.length;
+
+			return hit;
+		});
 	}
 
 	/** Option labels on one row when they fit, otherwise one per row. */
@@ -194,12 +273,12 @@ export class PermissionPrompt implements Component, Focusable {
 		const t = this.theme;
 
 		const labels = this.choices.map((c, i) => {
-			const label = ` [${c.key}] ${sanitize(c.label)} `; // labels can contain agent-provided paths
+			const label = PermissionPrompt.plainLabel(c);
 
 			return i === this.selected ? t.bg("selectedBg", t.bold(t.fg("accent", label))) : t.fg("muted", label);
 		});
 
-		const single = labels.join("  ");
+		const single = labels.join(OPTION_GAP);
 
 		return visibleWidth(single) <= inner ? [single] : labels;
 	}
@@ -276,10 +355,13 @@ export class PermissionPrompt implements Component, Focusable {
 		const pos = overflow ? ` ${this.scroll + 1}-${this.scroll + this.bodyHeight} / ${rows.length} ` : "";
 		out.push(border(`├${"─".repeat(Math.max(0, width - 3 - pos.length))}`) + t.fg("warning", pos) + border("─┤"));
 
+		this.hits = this.input ? [] : this.optionHits(out.length, inner);
+
 		for (const option of options) out.push(this.input ? `${border("│")} ${option} ${border("│")}` : row(option));
 
 		const select = this.stacked ? "↑↓ select" : "←→ select";
-		const scroll = this.stacked ? "PgUp PgDn scroll" : "↑↓ PgUp PgDn scroll";
+		// PgUp/PgDn are not shown: in fullscreen Pi takes them to scroll the transcript.
+		const scroll = this.stacked ? "⇧↑↓ scroll" : "↑↓ scroll";
 
 		const hint = this.input
 			? "Enter send · Esc back to options"
@@ -303,13 +385,16 @@ export class PermissionPrompt implements Component, Focusable {
 	}
 
 	private select(delta: number): void {
+		this.armed = undefined;
 		this.selected = (this.selected + delta + this.choices.length) % this.choices.length;
 		this.tui.requestRender();
 	}
 
-	/** Resolves with an option's key; the tell option opens the input instead. */
+	/** Resolves with an option's key; the message and tell options open the input instead. */
 	private choose(key: string): void {
-		if (key === TELL.key) this.openInput();
+		const spec = inputSpec(key);
+
+		if (spec) this.openInput(key, spec);
 		else this.done(key);
 	}
 
@@ -326,7 +411,10 @@ export class PermissionPrompt implements Component, Focusable {
 
 		const page = Math.max(1, this.bodyHeight - 1);
 
-		if (matchesKey(data, Key.up)) {
+		// Shift+↑↓ always scroll: the only scroll keys left when ↑↓ select and Pi owns PgUp/PgDn.
+		if (matchesKey(data, Key.shift("up"))) this.scrollBy(-1);
+		else if (matchesKey(data, Key.shift("down"))) this.scrollBy(1);
+		else if (matchesKey(data, Key.up)) {
 			if (this.stacked) this.select(-1);
 			else this.scrollBy(-1);
 		} else if (matchesKey(data, Key.down)) {
@@ -347,9 +435,31 @@ export class PermissionPrompt implements Component, Focusable {
 		}
 	}
 
+	/**
+	 * Wheel scrolls. A click selects an option; a second click on it confirms, so a
+	 * stray click never approves (Yes is selected by default). The press must be
+	 * handled too: Pi only sends the click to the component that took the press.
+	 */
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-		if (event.type !== "wheel" || !event.wheelDelta) return undefined;
-		this.scrollBy(event.wheelDelta);
+		if (event.type === "wheel") {
+			if (!event.wheelDelta) return undefined;
+			this.scrollBy(event.wheelDelta);
+
+			return { handled: true };
+		}
+
+		if (event.button !== "left" || (event.type !== "press" && event.type !== "click")) return undefined;
+		const hit = this.hits.find((h) => h.row === event.y && event.x >= h.start && event.x < h.end);
+
+		if (!hit) return undefined;
+
+		if (event.type === "click") {
+			if (this.armed === hit.index) this.choose(this.choices[hit.index].key);
+			else {
+				this.select(hit.index - this.selected);
+				this.armed = hit.index;
+			}
+		}
 
 		return { handled: true };
 	}

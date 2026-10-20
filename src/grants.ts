@@ -1,28 +1,26 @@
 /**
  * "Always this session" grants. In memory only; never written to disk.
+ *
+ * Agents chain `cd`, pipes and inline scripts into one huge command, so a grant
+ * on an exact command never matches twice. Grants are by folder instead: total
+ * access to a folder lets every tool, bash included, work there for the session.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type JsonObject, isString } from "./config.ts";
+import type { JsonObject } from "./config.ts";
 import { isInside } from "./policy.ts";
 
 export type Grant =
-	| { kind: "command"; command: string }
+	/** Any input, for tools without a path (MCP and extension tools). */
 	| { kind: "tool"; tool: string }
-	| { kind: "file"; tool: string; path: string }
-	| { kind: "dir"; tool: string; dir: string; recursive: boolean };
+	/** Every tool, bash included, inside `dir` (and its subfolders when `recursive`). */
+	| { kind: "access"; dir: string; recursive: boolean };
 
 export interface GrantChoice {
 	key: string;
 	label: string;
 	grant: Grant;
-}
-
-const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read", "ls", "find", "grep"]);
-
-function commandOf(input: JsonObject): string {
-	return isString(input.command) ? input.command : "";
 }
 
 /** Path segments kept when shortening a path for a button label. */
@@ -33,8 +31,10 @@ export interface CallTarget {
 	input: JsonObject;
 	/** Resolved path for file tools. */
 	absPath?: string;
-	/** The target is a protected permission file: only exact-file grants apply. */
-	protected?: boolean;
+	/** Every directory a bash command may run in; undefined when that cannot be known. */
+	dirs?: string[];
+	/** Asks every time (an `ask` rule, a protected file, a mentioned strict rule): no grant covers it. */
+	firm?: boolean;
 }
 
 /** The directory a file-tool call works in: the target itself if it is a directory. */
@@ -48,21 +48,67 @@ function scopeDir(absPath: string): string {
 	return path.dirname(absPath);
 }
 
-export function grantMatches(grant: Grant, target: CallTarget): boolean {
-	switch (grant.kind) {
-		case "command":
-			return target.tool === "bash" && grant.command === commandOf(target.input);
-		case "tool":
-			return grant.tool === target.tool;
-		case "file":
-			return grant.tool === target.tool && grant.path === target.absPath;
-		case "dir": {
-			if (grant.tool !== target.tool || !target.absPath || target.protected) return false;
-			const p = target.absPath;
+/** Deepest directory containing all of `dirs`. */
+function commonDir(dirs: string[]): string {
+	return dirs.reduce((common, d) => {
+		let c = common;
 
-			return grant.recursive ? isInside(p, grant.dir) : p === grant.dir || path.dirname(p) === grant.dir;
-		}
-	}
+		while (!isInside(d, c)) c = path.dirname(c);
+
+		return c;
+	});
+}
+
+/**
+ * Folders too broad to silence: one stray keypress would grant the whole home
+ * or disk. That is home itself and every folder containing it (`/home`).
+ */
+function tooBroad(dir: string): boolean {
+	return isInside(os.homedir(), dir) || dir === path.parse(dir).root;
+}
+
+/** The folder a call works in, which is what a grant is offered for. Never home, a folder containing it, or the root. */
+function folderOf(target: CallTarget): string | undefined {
+	const folder = target.absPath ? scopeDir(target.absPath) : target.dirs?.length ? commonDir(target.dirs) : undefined;
+
+	return folder && !tooBroad(folder) ? folder : undefined;
+}
+
+function covers(grant: { dir: string; recursive: boolean }, p: string, isDir: boolean): boolean {
+	if (grant.recursive) return isInside(p, grant.dir);
+
+	return p === grant.dir || (!isDir && path.dirname(p) === grant.dir);
+}
+
+export function grantMatches(grant: Grant, target: CallTarget): boolean {
+	// First, for every kind of grant: a firm question (an `ask` rule, a protected file) is never covered.
+	if (target.firm) return false;
+
+	if (grant.kind === "tool") return grant.tool === target.tool && !target.absPath;
+
+	if (target.absPath) return covers(grant, target.absPath, false);
+
+	return target.dirs !== undefined && target.dirs.every((d) => covers(grant, d, true));
+}
+
+/**
+ * Why a folder grant does not cover a call that touches its folder, for the
+ * prompt. Undefined when it covers the call, or the call never touches its folder.
+ */
+export function whyNotCovered(grant: Grant, target: CallTarget): string | undefined {
+	if (grant.kind !== "access" || grantMatches(grant, target)) return undefined;
+	const places = target.absPath ? [target.absPath] : (target.dirs ?? []);
+
+	if (!places.some((p) => isInside(p, grant.dir))) return undefined;
+
+	if (target.firm) return "this call always asks (an ask rule, a protected file or a strict rule it mentions)";
+	const isDir = !target.absPath;
+	const outside = places.find((p) => !isInside(p, grant.dir));
+
+	if (outside) return `it may also run in ${shortPath(outside)}, outside that folder`;
+	const deeper = places.find((p) => !covers(grant, p, isDir));
+
+	return deeper ? `${shortPath(deeper)} is in a subfolder, and [d] would include subfolders` : undefined;
 }
 
 /** Home as `~`, and long paths reduced to their last segments: `…/Temp/soloterm-clipboard`. */
@@ -78,45 +124,35 @@ export function shortPath(p: string): string {
 
 /** Full, explicit description for the /permissions card. */
 export function describeGrant(grant: Grant): string {
+	if (grant.kind === "tool") return `${grant.tool}: any input`;
 	const home = os.homedir();
-	const tilde = (p: string) => (p === home || p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p);
+	const dir = grant.dir === home || grant.dir.startsWith(`${home}/`) ? `~${grant.dir.slice(home.length)}` : grant.dir;
 
-	switch (grant.kind) {
-		case "command":
-			return `bash: ${grant.command}`;
-		case "tool":
-			return `${grant.tool}: any input`;
-		case "file":
-			return `${grant.tool}: ${tilde(grant.path)}`;
-		case "dir":
-			return `${grant.tool}: in ${tilde(grant.dir)}/${grant.recursive ? " and subfolders" : ""}`;
-	}
+	return `stfu pi on ${dir}/${grant.recursive ? " and subfolders" : ""}`;
 }
 
 /** The "always" options offered for a call, each with an explicit label. */
 export function grantChoices(target: CallTarget): GrantChoice[] {
-	const { tool, absPath } = target;
+	// A firm question is never covered by a grant, so none is offered.
+	if (target.firm) return [];
+	const folder = folderOf(target);
 
-	if (tool === "bash") {
-		const command = commandOf(target.input);
+	if (!folder) {
+		// No folder to offer (unknown, home or root): file tools and bash get no grant.
+		if (target.tool === "bash" || target.absPath) return [];
+		const { tool } = target;
 
-		return [{ key: "a", label: "Always: this exact command", grant: { kind: "command", command } }];
+		return [{ key: "a", label: `Always: ${tool} (any input)`, grant: { kind: "tool", tool } }];
 	}
 
-	if (!absPath) return [{ key: "a", label: `Always: ${tool} (any input)`, grant: { kind: "tool", tool } }];
+	const short = shortPath(folder);
 
-	const dir = scopeDir(absPath);
-
-	const recursive: GrantChoice = {
-		key: "d",
-		label: `Always: ${tool} in ${shortPath(dir)}/ and subfolders`,
-		grant: { kind: "dir", tool, dir, recursive: true },
-	};
-
-	const narrow: GrantChoice = READ_ONLY_TOOLS.has(tool)
-		? { key: "a", label: `Always: ${tool} in ${shortPath(dir)}/`, grant: { kind: "dir", tool, dir, recursive: false } }
-		: { key: "a", label: `Always: ${tool} ${shortPath(absPath)}`, grant: { kind: "file", tool, path: absPath } };
-
-	// Directory grants never cover protected files, so do not offer one for them.
-	return target.protected ? [narrow] : [narrow, recursive];
+	return [
+		{ key: "a", label: `stfu pi on ${short}/`, grant: { kind: "access", dir: folder, recursive: false } },
+		{
+			key: "d",
+			label: `stfu pi on ${short}/ and subfolders`,
+			grant: { kind: "access", dir: folder, recursive: true },
+		},
+	];
 }

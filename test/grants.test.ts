@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { type CallTarget, describeGrant, grantChoices, grantMatches, shortPath } from "../src/grants.ts";
+import { type CallTarget, describeGrant, grantChoices, grantMatches, shortPath, whyNotCovered } from "../src/grants.ts";
 
 // Real directories so "is this path a directory" checks behave like in use.
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-permissions-grants-")));
@@ -15,22 +15,79 @@ const shot = (name: string) => path.join(clipboard, name);
 
 const read = (absPath: string): CallTarget => ({ tool: "read", input: { path: absPath }, absPath });
 
-const edit = (absPath: string, isProtected = false): CallTarget => ({
+const edit = (absPath: string, firm = false): CallTarget => ({
 	tool: "edit",
 	input: { path: absPath },
 	absPath,
-	protected: isProtected,
+	firm,
+});
+
+const bash = (dirs: string[] | undefined, firm = false): CallTarget => ({
+	tool: "bash",
+	input: { command: "x" },
+	dirs,
+	firm,
 });
 
 const choice = (target: CallTarget, key: string) => grantChoices(target).find((c) => c.key === key);
 
 describe("grantChoices", () => {
-	it("offers exact command only for bash", () => {
-		const choices = grantChoices({ tool: "bash", input: { command: "ls" } });
+	it("offers total access to the folder, and to its subfolders", () => {
 		assert.deepEqual(
-			choices.map((c) => [c.key, c.label]),
-			[["a", "Always: this exact command"]],
+			grantChoices(read(shot("paste-1.png"))).map((c) => [c.key, c.label]),
+			[
+				["a", `stfu pi on ${shortPath(clipboard)}/`],
+				["d", `stfu pi on ${shortPath(clipboard)}/ and subfolders`],
+			],
 		);
+	});
+
+	it("offers the same for every file tool", () => {
+		assert.deepEqual(
+			grantChoices(edit(shot("a.ts"))).map((c) => c.grant),
+			[
+				{ kind: "access", dir: clipboard, recursive: false },
+				{ kind: "access", dir: clipboard, recursive: true },
+			],
+		);
+	});
+
+	it("uses the directory itself when the target is a directory (ls, find, grep)", () => {
+		assert.deepEqual(choice({ tool: "ls", input: {}, absPath: clipboard }, "a")?.grant, {
+			kind: "access",
+			dir: clipboard,
+			recursive: false,
+		});
+	});
+
+	it("offers bash the folder its command runs in, the common one after a cd", () => {
+		assert.equal(choice(bash([clipboard]), "a")?.label, `stfu pi on ${shortPath(clipboard)}/`);
+		assert.deepEqual(choice(bash([clipboard, shot("nested")]), "d")?.grant, {
+			kind: "access",
+			dir: clipboard,
+			recursive: true,
+		});
+	});
+
+	it("offers nothing for bash when its directory is unknown, or for firm questions", () => {
+		assert.deepEqual(grantChoices(bash(undefined)), []);
+		assert.deepEqual(grantChoices(bash([clipboard], true)), []);
+		assert.deepEqual(grantChoices(edit(shot("permissions.json"), true)), []);
+	});
+
+	it("never offers home or the root: one stray keypress would silence everything", () => {
+		assert.deepEqual(grantChoices(bash([os.homedir()])), []);
+		assert.deepEqual(grantChoices(bash([clipboard, os.homedir()])), [], "a cd that widens the common folder to home");
+		assert.deepEqual(grantChoices(bash(["/"])), []);
+		assert.deepEqual(grantChoices(read(path.join(os.homedir(), ".bashrc"))), []);
+	});
+
+	it("never offers a folder that contains home, like /home", () => {
+		const aboveHome = path.dirname(os.homedir());
+		const sibling = path.join(aboveHome, "other-user");
+		assert.deepEqual(grantChoices(bash([aboveHome])), []);
+		assert.deepEqual(grantChoices(bash([os.homedir(), sibling])), [], "a cd next to home widens to its parent");
+		assert.equal(grantChoices(bash([sibling])).length, 2, "a folder next to home, not containing it, is offered");
 	});
 
 	it("offers any-input for tools without a path", () => {
@@ -39,76 +96,78 @@ describe("grantChoices", () => {
 			["Always: mcp__x (any input)"],
 		);
 	});
-
-	it("offers directory and directory+subfolders for read-only tools", () => {
-		const labels = grantChoices(read(shot("paste-1.png"))).map((c) => c.label);
-		assert.deepEqual(labels, [
-			`Always: read in ${shortPath(clipboard)}/`,
-			`Always: read in ${shortPath(clipboard)}/ and subfolders`,
-		]);
-	});
-
-	it("offers exact file and directory+subfolders for write tools", () => {
-		const labels = grantChoices(edit(shot("a.ts"))).map((c) => c.label);
-		assert.deepEqual(labels, [
-			`Always: edit ${shortPath(shot("a.ts"))}`,
-			`Always: edit in ${shortPath(clipboard)}/ and subfolders`,
-		]);
-	});
-
-	it("uses the directory itself when the target is a directory (ls, find, grep)", () => {
-		const grant = choice({ tool: "ls", input: {}, absPath: clipboard }, "a")?.grant;
-		assert.deepEqual(grant, { kind: "dir", tool: "ls", dir: clipboard, recursive: false });
-	});
-
-	it("offers no directory option for protected files", () => {
-		assert.deepEqual(
-			grantChoices(edit(shot("permissions.json"), true)).map((c) => c.key),
-			["a"],
-		);
-	});
 });
 
 describe("grantMatches", () => {
-	it("[a] on read covers the next screenshot in the same directory", () => {
-		const grant = choice(read(shot("paste-1.png")), "a")?.grant;
-		assert.ok(grant);
-		assert.ok(grantMatches(grant, read(shot("paste-2.png"))));
-		assert.ok(!grantMatches(grant, read(shot("nested/paste-3.png"))));
-		assert.ok(!grantMatches(grant, read(path.join(root, "other.png"))));
+	const folder = { kind: "access", dir: clipboard, recursive: false } as const;
+	const tree = { kind: "access", dir: clipboard, recursive: true } as const;
+
+	it("folder access covers every tool in that folder, not deeper", () => {
+		assert.ok(grantMatches(folder, read(shot("paste-2.png"))));
+		assert.ok(grantMatches(folder, edit(shot("a.ts"))));
+		assert.ok(grantMatches(folder, bash([clipboard])));
+		assert.ok(!grantMatches(folder, read(shot("nested/paste-3.png"))));
+		assert.ok(!grantMatches(folder, bash([shot("nested")])));
+		assert.ok(!grantMatches(folder, read(path.join(root, "other.png"))));
 	});
 
-	it("[d] covers subfolders too", () => {
-		const grant = choice(read(shot("paste-1.png")), "d")?.grant;
-		assert.ok(grant);
-		assert.ok(grantMatches(grant, read(shot("nested/paste-3.png"))));
-		assert.ok(!grantMatches(grant, read(path.join(root, "other.png"))));
+	it("subfolder access covers the whole tree", () => {
+		assert.ok(grantMatches(tree, read(shot("nested/paste-3.png"))));
+		assert.ok(grantMatches(tree, bash([clipboard, shot("nested")])));
+		assert.ok(!grantMatches(tree, read(path.join(root, "other.png"))));
 	});
 
-	it("is limited to the same tool", () => {
-		const grant = choice(read(shot("paste-1.png")), "d")?.grant;
-		assert.ok(grant);
-		assert.ok(!grantMatches(grant, edit(shot("paste-1.png"))));
+	it("covers bash only when every directory it may run in is covered", () => {
+		assert.ok(!grantMatches(tree, bash([clipboard, root])));
+		assert.ok(!grantMatches(tree, bash(undefined)));
 	});
 
-	it("[a] on edit covers only that file", () => {
-		const grant = choice(edit(shot("a.ts")), "a")?.grant;
-		assert.ok(grant);
-		assert.ok(grantMatches(grant, edit(shot("a.ts"))));
-		assert.ok(!grantMatches(grant, edit(shot("b.ts"))));
+	it("never covers firm questions (ask rules, protected files)", () => {
+		assert.ok(!grantMatches(tree, edit(shot("permissions.json"), true)));
+		assert.ok(!grantMatches(tree, bash([clipboard], true)));
 	});
 
-	it("directory grants never cover protected files", () => {
-		const grant = choice(edit(shot("a.ts")), "d")?.grant;
-		assert.ok(grant);
-		assert.ok(grantMatches(grant, edit(shot("b.ts"))));
-		assert.ok(!grantMatches(grant, edit(shot("permissions.json"), true)));
+	it("never covers or offers a grant for a firm call to a tool without a path", () => {
+		const firm: CallTarget = { tool: "mcp__x", input: {}, firm: true };
+		assert.equal(grantMatches({ kind: "tool", tool: "mcp__x" }, firm), false);
+		assert.deepEqual(grantChoices(firm), []);
 	});
 
-	it("matches bash commands exactly", () => {
-		const grant = { kind: "command", command: "ls" } as const;
-		assert.ok(grantMatches(grant, { tool: "bash", input: { command: "ls" } }));
-		assert.ok(!grantMatches(grant, { tool: "bash", input: { command: "ls " } }));
+	it("any-input grants cover only their tool", () => {
+		const grant = { kind: "tool", tool: "mcp__x" } as const;
+		assert.ok(grantMatches(grant, { tool: "mcp__x", input: { a: 1 } }));
+		assert.ok(!grantMatches(grant, { tool: "mcp__y", input: {} }));
+	});
+});
+
+describe("whyNotCovered", () => {
+	const folder = { kind: "access", dir: clipboard, recursive: false } as const;
+	const tree = { kind: "access", dir: clipboard, recursive: true } as const;
+	const nested = shot("nested");
+
+	it("explains a subfolder that a folder-only grant does not reach", () => {
+		assert.equal(
+			whyNotCovered(folder, bash([clipboard, nested])),
+			`${shortPath(nested)} is in a subfolder, and [d] would include subfolders`,
+		);
+		assert.match(whyNotCovered(folder, read(shot("nested/a.png"))) ?? "", /is in a subfolder/);
+	});
+
+	it("explains a cd that leaves the folder", () => {
+		assert.equal(
+			whyNotCovered(tree, bash([clipboard, root])),
+			`it may also run in ${shortPath(root)}, outside that folder`,
+		);
+	});
+
+	it("explains a call that always asks", () => {
+		assert.match(whyNotCovered(tree, edit(shot("a.ts"), true)) ?? "", /^this call always asks/);
+	});
+
+	it("says nothing when the grant covers the call, or the call never touches its folder", () => {
+		assert.equal(whyNotCovered(tree, bash([clipboard, nested])), undefined);
+		assert.equal(whyNotCovered(folder, read(path.join(root, "other.png"))), undefined);
+		assert.equal(whyNotCovered({ kind: "tool", tool: "mcp__x" }, read(shot("a.png"))), undefined);
 	});
 });
 
@@ -121,8 +180,8 @@ describe("shortPath and describeGrant", () => {
 
 	it("describes grants explicitly with the full path", () => {
 		const dir = "/mnt/c/Temp/soloterm-clipboard";
-		assert.equal(describeGrant({ kind: "dir", tool: "read", dir, recursive: false }), `read: in ${dir}/`);
-		assert.equal(describeGrant({ kind: "dir", tool: "read", dir, recursive: true }), `read: in ${dir}/ and subfolders`);
-		assert.equal(describeGrant({ kind: "command", command: "ls -la" }), "bash: ls -la");
+		assert.equal(describeGrant({ kind: "access", dir, recursive: false }), `stfu pi on ${dir}/`);
+		assert.equal(describeGrant({ kind: "access", dir, recursive: true }), `stfu pi on ${dir}/ and subfolders`);
+		assert.equal(describeGrant({ kind: "tool", tool: "mcp__x" }), "mcp__x: any input");
 	});
 });

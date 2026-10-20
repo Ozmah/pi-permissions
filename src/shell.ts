@@ -10,11 +10,61 @@
 /** Operator that precedes a segment. `"\n"` is a plain newline separator. */
 export type Operator = "&&" | "||" | "|" | ";" | "&" | "\n";
 
+/** A here-document: the lines after the command, up to `delimiter`, fed to its stdin. */
+export interface Heredoc {
+	delimiter: string;
+	body: string;
+}
+
 export interface Segment {
-	/** Segment text, trimmed, original spacing preserved. */
+	/** Segment text, trimmed, original spacing preserved. Here-document bodies are not part of it. */
 	text: string;
 	/** Operator before this segment (undefined for the first one). */
 	op?: Operator;
+	/** Here-documents opened by this segment, in order. */
+	heredocs?: Heredoc[];
+}
+
+/** A `<<` seen on the current line, waiting for its body after the newline. */
+interface PendingHeredoc {
+	delimiter: string;
+	/** Any part of the delimiter was quoted: the body is literal, no expansion. */
+	quoted: boolean;
+	/** `<<-`: leading tabs are stripped, also from the delimiter line. */
+	stripTabs: boolean;
+	/** Index of the segment it belongs to. */
+	owner: number;
+}
+
+/** Reads the delimiter after `<<` at `start`. Undefined when there is none. */
+function readDelimiter(command: string, start: number): Omit<PendingHeredoc, "owner"> | undefined {
+	let i = start;
+	const stripTabs = command[i] === "-";
+
+	if (stripTabs) i++;
+
+	while (command[i] === " " || command[i] === "\t") i++;
+	let delimiter = "";
+	let quoted = false;
+
+	for (; i < command.length && !/[\s;|&<>()]/.test(command[i]); i++) {
+		const ch = command[i];
+
+		if (ch === "'" || ch === '"') {
+			const close = command.indexOf(ch, i + 1);
+
+			if (close < 0) return undefined;
+			delimiter += command.slice(i + 1, close);
+			quoted = true;
+			i = close;
+		} else if (ch === "\\" && i + 1 < command.length) {
+			delimiter += command[i + 1];
+			quoted = true;
+			i++;
+		} else delimiter += ch;
+	}
+
+	return delimiter ? { delimiter, quoted, stripTabs } : undefined;
 }
 
 export interface ShellAnalysis {
@@ -49,6 +99,7 @@ export function parseShell(command: string): ShellAnalysis {
 	let cur = "";
 	let op: Operator | undefined;
 	let quote: "'" | '"' | null = null;
+	let pending: PendingHeredoc[] = [];
 
 	const push = (nextOp: Operator) => {
 		const text = cur.trim();
@@ -56,6 +107,44 @@ export function parseShell(command: string): ShellAnalysis {
 		if (text) segments.push(op ? { text, op } : { text });
 		cur = "";
 		op = nextOp;
+	};
+
+	/**
+	 * Consumes the bodies of the pending here-documents, starting at `pos` (the
+	 * line after the command). Returns the index of the first character after them.
+	 */
+	const readBodies = (pos: number): number => {
+		for (const h of pending) {
+			const lines: string[] = [];
+			let closed = false;
+
+			while (pos < command.length) {
+				const nl = command.indexOf("\n", pos);
+				const line = command.slice(pos, nl < 0 ? command.length : nl);
+				pos = nl < 0 ? command.length : nl + 1;
+
+				if ((h.stripTabs ? line.replace(/^\t+/, "") : line) === h.delimiter) {
+					closed = true;
+					break;
+				}
+
+				lines.push(line);
+			}
+
+			// Without its delimiter, bash takes everything left as the body: nothing after it can be trusted.
+			if (!closed) risky.add("unclosed here-document");
+			const body = lines.join("\n");
+
+			// An unquoted delimiter means the body is expanded: substitutions in it run.
+			if (!h.quoted && /`|\$\(/.test(body)) risky.add("command substitution");
+			const owner = segments[h.owner];
+
+			if (owner) (owner.heredocs ??= []).push({ delimiter: h.delimiter, body });
+		}
+
+		pending = [];
+
+		return pos;
 	};
 
 	for (let i = 0; i < command.length; i++) {
@@ -85,6 +174,16 @@ export function parseShell(command: string): ShellAnalysis {
 		}
 
 		// Unquoted
+		// A `#` starting a word comments out the rest of the line, as in bash: quotes, `<<` and operators
+		// in it do nothing. Scanning them would open a fake quote or here-document that hides the next lines.
+		if (ch === "#" && (prev === undefined || /[\s;&|()<>]/.test(prev))) {
+			const nl = command.indexOf("\n", i);
+			const end = nl < 0 ? command.length : nl;
+			cur += command.slice(i, end);
+			i = end - 1;
+			continue;
+		}
+
 		if (ch === "'" || ch === '"') {
 			quote = ch;
 			cur += ch;
@@ -94,6 +193,13 @@ export function parseShell(command: string): ShellAnalysis {
 		if (ch === "`" || (ch === "$" && next === "(")) risky.add("command substitution");
 
 		if ((ch === "<" || ch === ">") && next === "(") risky.add("process substitution");
+
+		if (ch === "<" && next === "<" && command[i + 2] !== "<" && prev !== "<") {
+			const h = readDelimiter(command, i + 2);
+
+			if (h) pending.push({ ...h, owner: segments.length });
+			else risky.add("unsupported here-document");
+		}
 
 		if (ch === ">" && next !== "(" && isFileRedirect(command, i)) risky.add("redirection to file");
 
@@ -111,6 +217,8 @@ export function parseShell(command: string): ShellAnalysis {
 			push(";");
 		} else if (ch === "\n") {
 			push("\n");
+
+			if (pending.length) i = readBodies(i + 1) - 1;
 		} else if (ch === "&" && prev !== ">" && prev !== "<" && next !== ">") {
 			push("&"); // background operator
 		} else {
@@ -121,7 +229,159 @@ export function parseShell(command: string): ShellAnalysis {
 	if (quote) risky.add("unclosed quote");
 	push("\n");
 
+	if (pending.length) readBodies(command.length);
+
 	return { segments, risky: [...risky] };
+}
+
+/** A shell word after quote removal. */
+export interface Word {
+	kind: "word";
+	value: string;
+	/** Contains `$` or a backquote: its value is only known at run time. */
+	dynamic: boolean;
+	/** Contains an unquoted `*`, `?` or `[`: the shell expands it to matching paths. */
+	glob: boolean;
+	/** Starts with an unquoted `~` or `~/`, which the shell expands to the home directory. */
+	tilde: boolean;
+	/** Some part of it was quoted or escaped. */
+	quoted: boolean;
+}
+
+/** A redirection operator, with its fd prefix: `<`, `2>`, `>>`, `&>`, `<<`, `>&`. Its target is the next word. */
+export interface Redirect {
+	kind: "redirect";
+	op: string;
+}
+
+export type Token = Word | Redirect;
+
+/**
+ * Whether a `$` followed by `next` expands. It does before a name, a digit, a
+ * special parameter, `{` or `(`; unquoted also before `'` and `"` (`$'..'`,
+ * `$".."`). Anything else, like `$"` closing a string in `"^$"`, is a literal `$`.
+ */
+function dollarExpands(next: string | undefined, inDoubleQuotes: boolean): boolean {
+	if (next === undefined) return false;
+
+	if (/[A-Za-z0-9_{(@*#?$!-]/.test(next)) return true;
+
+	return !inDoubleQuotes && (next === "'" || next === '"');
+}
+
+const REDIRECT_OPS = ["<<<", "<<-", "<<", "<&", "<>", "<", ">>", ">|", ">&", ">"];
+
+/**
+ * Splits one segment (from `parseShell`) into words and redirections. Returns
+ * undefined for syntax it does not model (subshells, groups, brace expansion,
+ * comments, unclosed quotes): callers must then treat the segment as unknown.
+ */
+export function tokenize(text: string): Token[] | undefined {
+	const tokens: Token[] = [];
+	let word: Word | undefined;
+
+	const current = (): Word => {
+		word ??= { kind: "word", value: "", dynamic: false, glob: false, tilde: false, quoted: false };
+
+		return word;
+	};
+
+	const end = () => {
+		if (!word) return;
+
+		// `~user`, `~+`, `~-` expand to directories that cannot be known here.
+		if (word.tilde && word.value !== "~" && !word.value.startsWith("~/")) word.dynamic = true;
+		tokens.push(word);
+		word = undefined;
+	};
+
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+
+		if (ch === "'") {
+			const close = text.indexOf("'", i + 1);
+
+			if (close < 0) return undefined;
+			const w = current();
+			w.value += text.slice(i + 1, close);
+			w.quoted = true;
+			i = close;
+			continue;
+		}
+
+		if (ch === '"') {
+			const w = current();
+			w.quoted = true;
+			let j = i + 1;
+
+			for (; j < text.length && text[j] !== '"'; j++) {
+				const c = text[j];
+
+				if (c === "\\" && '$`"\\'.includes(text[j + 1] ?? "")) {
+					w.value += text[j + 1];
+					j++;
+					continue;
+				}
+
+				if (c === "`" || (c === "$" && dollarExpands(text[j + 1], true))) w.dynamic = true;
+				w.value += c;
+			}
+
+			if (j >= text.length) return undefined;
+			i = j;
+			continue;
+		}
+
+		if (ch === "\\") {
+			if (i + 1 >= text.length) return undefined;
+			const w = current();
+			w.value += text[i + 1];
+			w.quoted = true;
+			i++;
+			continue;
+		}
+
+		if (/\s/.test(ch)) {
+			end();
+			continue;
+		}
+
+		if (ch === "<" || ch === ">" || (ch === "&" && text[i + 1] === ">")) {
+			// An unquoted all-digit word right before the operator is its fd (`2>`).
+			let op = "";
+
+			if (word && !word.quoted && /^\d+$/.test(word.value)) {
+				op = word.value;
+				word = undefined;
+			} else end();
+
+			if (ch === "&") {
+				op += "&";
+				i++;
+			}
+
+			const rest = text.slice(i);
+			const found = REDIRECT_OPS.find((o) => rest.startsWith(o)) ?? text[i];
+			tokens.push({ kind: "redirect", op: op + found });
+			i += found.length - 1;
+			continue;
+		}
+
+		// Subshells, groups, brace expansion, comments, stray operators.
+		if ("(){}|;&".includes(ch) || (ch === "#" && !word)) return undefined;
+		const w = current();
+
+		if (ch === "`" || (ch === "$" && dollarExpands(text[i + 1], false))) w.dynamic = true;
+
+		if (ch === "*" || ch === "?" || ch === "[") w.glob = true;
+
+		if (ch === "~" && w.value === "" && !w.quoted) w.tilde = true;
+		w.value += ch;
+	}
+
+	end();
+
+	return tokens;
 }
 
 /** Collapses whitespace for rule matching. */

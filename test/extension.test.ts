@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { before, beforeEach, describe, it } from "node:test";
 import type { Component } from "@earendil-works/pi-tui";
 import type { JsonObject } from "../src/config.ts";
+import { shortPath } from "../src/grants.ts";
 import type { PromptHost, PromptTheme } from "../src/prompt-ui.ts";
 import type { Summary } from "../src/summary.ts";
 
@@ -24,7 +25,9 @@ fs.mkdirSync(agentDir, { recursive: true });
 // Resolved like the extension does (e.g. /tmp is a symlink on macOS).
 const project = fs.realpathSync(path.join(home, "project"));
 
-const baseConfig = { tools: { read: "allow" }, bash: { "git status *": "allow", "sudo *": "deny", "*": "ask" } };
+const baseConfig = {
+	commands: { "git status *": "yes-i-am-very-sure", "sudo *": "deny", "rm -rf /*": "halt", "git push *": "ask" },
+};
 
 const writeConfig = (extra: JsonObject = {}) =>
 	fs.writeFileSync(configFile, JSON.stringify({ ...baseConfig, ...extra }));
@@ -36,11 +39,20 @@ interface ToolResult {
 }
 
 interface ToolEvent {
+	toolCallId: string;
 	toolName: string;
 	input: JsonObject;
 }
 
-/** The prompt's answer: the chosen key, plus the text for "tell pi". */
+/** A tool's output, as the tool_result handler sees and returns it. */
+interface ResultContent {
+	content: { type: "text"; text: string }[];
+	structuredContent?: JsonObject;
+}
+
+type ResultHandler = (event: ResultContent & { toolCallId: string }) => ResultContent | undefined;
+
+/** The prompt's answer: the chosen key, plus the text for MESSAGE and "tell pi". */
 interface Answer {
 	key: string;
 	text?: string;
@@ -73,6 +85,7 @@ interface Command {
 }
 
 const handlers = new Map<string, Handler>();
+const resultHandlers = new Map<string, ResultHandler>();
 const commands = new Map<string, Command>();
 const renderers = new Map<string, EntryRenderer>();
 const entries: { type: string; data: Summary }[] = [];
@@ -90,7 +103,10 @@ before(async () => {
 	const { default: extension } = await import("../src/index.ts");
 
 	const fakePi = {
-		on: (name: string, handler: Handler) => handlers.set(name, handler),
+		on: (name: string, handler: Handler & ResultHandler) => {
+			handlers.set(name, handler);
+			resultHandlers.set(name, handler);
+		},
 		registerCommand: (name: string, command: Command) => commands.set(name, command),
 		registerEntryRenderer: (type: string, renderer: EntryRenderer) => renderers.set(type, renderer),
 		appendEntry: (type: string, data: Summary) => entries.push({ type, data }),
@@ -162,8 +178,19 @@ function ctx({
 	};
 }
 
-const call = (toolName: string, input: JsonObject, c = ctx()) =>
-	registered(handlers, "tool_call")({ toolName, input }, c);
+const call = (toolName: string, input: JsonObject, c = ctx(), toolCallId = "call-1") =>
+	registered(handlers, "tool_call")({ toolCallId, toolName, input }, c);
+
+/** Runs the tool_result handler on a fake output of call `toolCallId`. */
+const result = (toolCallId = "call-1") =>
+	registered(
+		resultHandlers,
+		"tool_result",
+	)({
+		toolCallId,
+		content: [{ type: "text", text: "output" }],
+		structuredContent: { ok: true },
+	});
 
 const bash = (command: string, c = ctx()) => call("bash", { command }, c);
 const blocked = (result: ToolResult | undefined) => result?.block === true;
@@ -186,34 +213,96 @@ describe("tool calls", () => {
 		assert.ok(blocked(await bash("sudo ls", ctx({ key: "y" }))));
 	});
 
-	it("runs on Yes and blocks on No", async () => {
-		assert.equal(await bash("echo a", ctx({ key: "y" })), undefined);
-		assert.ok(blocked(await bash("echo b", ctx({ key: "n" }))));
+	it("halts: blocks, alerts the user and tells the agent it is a config rule", async () => {
+		const result = await bash("rm -rf /", ctx({ key: "y" }));
+		assert.ok(blocked(result));
+		assert.match(result?.reason ?? "", /^Halted: the user's permission config sets this to halt/);
+		assert.ok(
+			notes.at(-1)?.startsWith("\u{1F6D1} Halted: bash tried something set to halt in your permissions config"),
+		);
 	});
 
-	it("remembers 'always' for the exact command", async () => {
-		assert.equal(await bash("echo c", ctx({ key: "a" })), undefined);
-		assert.equal(await bash("echo c", ctx({ key: "n" })), undefined);
-		assert.ok(blocked(await bash("echo c ", ctx({ key: "n" }))));
+	it("says when an active grant touches a call but does not cover it", async () => {
+		fs.mkdirSync(path.join(project, "packages", "date"), { recursive: true });
+		assert.equal(await bash("make one", ctx({ key: "a" })), undefined);
+
+		let rendered = "";
+		const c = ctx({ key: "n" });
+		const custom = c.ui.custom;
+
+		c.ui.custom = (factory, options) =>
+			custom((host, th, kb, done) => {
+				const component = factory(host, th, kb, done);
+				rendered = component.render(200).join("\n");
+
+				return component;
+			}, options);
+
+		assert.ok(blocked(await bash("cd packages/date && make two", c)));
+		assert.ok(rendered.includes(`stfu pi on ${project.replace(home, "~")}/ → does not cover this call:`));
+		assert.ok(rendered.includes("is in a subfolder, and [d] would include subfolders"));
+	});
+
+	it("an ask rule on a tool without a path is never silenced by an any-input grant", async () => {
+		writeConfig({ tools: { mcp__x: "ask" } });
+		const offered: string[] = [];
+		const c = ctx({ key: "y" });
+		const custom = c.ui.custom;
+
+		c.ui.custom = (factory, options) =>
+			custom((host, th, kb, done) => {
+				const component = factory(host, th, kb, done);
+				offered.push(component.render(200).join("\n"));
+
+				return component;
+			}, options);
+
+		assert.equal(await call("mcp__x", {}, c), undefined);
+		assert.ok(!offered.join("").includes("Always:"), "no any-input option is offered");
+		assert.ok(blocked(await call("mcp__x", {}, ctx({ key: "n" }))), "the next call still asks");
+	});
+
+	it("an ask rule asks even with a stfu grant", async () => {
+		assert.equal(await bash("make stfu", ctx({ key: "d" })), undefined);
+		assert.equal(await bash("make covered", ctx({ key: "n" })), undefined);
+		assert.ok(blocked(await bash("git push", ctx({ key: "n" }))));
+	});
+
+	it("reports a config in the old format", async () => {
+		writeConfig({ default: "ask", bash: { "*": "ask" } });
+		await bash("make old", ctx({ key: "y" }));
+		assert.ok(notes.some((n) => n.includes("default, bash: old format")));
+	});
+
+	it("runs on Yes and blocks on No", async () => {
+		assert.equal(await bash("make a", ctx({ key: "y" })), undefined);
+		assert.ok(blocked(await bash("make b", ctx({ key: "n" }))));
+	});
+
+	it("[a] gives total access to the folder the command runs in, deny rules still apply", async () => {
+		assert.equal(await bash("make c", ctx({ key: "a" })), undefined);
+		assert.equal(await bash("touch x && make other", ctx({ key: "n" })), undefined);
+		assert.ok(blocked(await bash("sudo ls", ctx({ key: "n" }))));
+		assert.ok(blocked(await bash(`cd ${home} && ls -la`, ctx({ key: "n" }))), "the cd leaves the folder");
 	});
 
 	it("denies when the agent run is aborted while prompting", async () => {
 		const controller = new AbortController();
-		const pending = bash("echo d", ctx({ signal: controller.signal }));
+		const pending = bash("make d", ctx({ signal: controller.signal }));
 		controller.abort();
 		assert.ok(blocked(await pending));
 	});
 
 	it("blocks 'ask' calls when there is no UI", async () => {
-		assert.ok(blocked(await bash("echo e", ctx({ hasUI: false }))));
+		assert.ok(blocked(await bash("make e", ctx({ hasUI: false }))));
 	});
 
 	it("falls back to select() outside the TUI", async () => {
-		assert.equal(await bash("echo f", ctx({ mode: "rpc" })), undefined);
+		assert.equal(await bash("make f", ctx({ mode: "rpc" })), undefined);
 	});
 
 	it("protects the state file", async () => {
-		writeConfig({ default: "allow", tools: { "*": "allow" } });
+		writeConfig({ paths: { "/**": "yes-i-am-very-sure" }, tools: { "*": "yes-i-am-very-sure" } });
 		assert.ok(blocked(await call("write", { path: stateFile, content: "{}" }, ctx({ key: "n" }))));
 	});
 });
@@ -221,7 +310,7 @@ describe("tool calls", () => {
 describe("prompt position", () => {
 	it("replaces the editor by default (no overlay)", async () => {
 		let options: CustomOptions | undefined | "unset" = "unset";
-		await bash("echo g", ctx({ key: "y", onCustom: (o) => (options = o) }));
+		await bash("make g", ctx({ key: "y", onCustom: (o) => (options = o) }));
 		assert.equal(options, undefined);
 	});
 
@@ -229,7 +318,7 @@ describe("prompt position", () => {
 		for (const position of ["center", "top"]) {
 			writeConfig({ ui: { position } });
 			let options: CustomOptions | undefined;
-			await bash(`echo ${position}`, ctx({ key: "y", onCustom: (o) => (options = o) }));
+			await bash(`make ${position}`, ctx({ key: "y", onCustom: (o) => (options = o) }));
 			assert.equal(options?.overlay, true, position);
 		}
 	});
@@ -240,7 +329,7 @@ describe("/permissions off | on", () => {
 		await run("off");
 		assert.ok(JSON.parse(fs.readFileSync(stateFile, "utf8")).disabled[project]);
 		assert.equal(await bash("sudo ls", ctx({ key: "n" })), undefined);
-		assert.equal(await bash("echo x", ctx({ key: "n" })), undefined);
+		assert.equal(await bash("make x", ctx({ key: "n" })), undefined);
 		assert.match(status.get("permissions") ?? "", /permissions off$/);
 	});
 
@@ -292,7 +381,7 @@ describe("/permissions off | on", () => {
 		const text = component.render(80).join("\n");
 		assert.match(text, /pi-permissions/);
 		assert.match(text, /off \(this session\)/);
-		assert.match(text, /git status \*\s+allow/);
+		assert.match(text, /git status \*\s+yes-i-am-very-sure/);
 	});
 
 	it("completes subcommands", () => {
@@ -322,18 +411,72 @@ describe("always grants", () => {
 		assert.equal(await read(shot("nested/paste-3.png"), ctx({ key: "n" })), undefined);
 	});
 
-	it("[a] on edit allows only that file", async () => {
+	it("total access covers every tool in the folder, bash included", async () => {
 		const edit = (p: string, key: string) => call("edit", { path: p, edits: [] }, ctx({ key }));
 		assert.equal(await edit(path.join(project, "a.ts"), "a"), undefined);
-		assert.equal(await edit(path.join(project, "a.ts"), "n"), undefined);
-		assert.ok(blocked(await edit(path.join(project, "b.ts"), "n")));
+		assert.equal(await edit(path.join(project, "b.ts"), "n"), undefined);
+		assert.equal(await call("write", { path: path.join(project, "c.ts"), content: "" }, ctx({ key: "n" })), undefined);
+		assert.equal(await bash("rm c.ts", ctx({ key: "n" })), undefined);
+		assert.ok(blocked(await edit(path.join(project, "sub", "d.ts"), "n")), "[a] is not recursive");
+	});
+
+	it("shows active stfu grants in the status bar until reset", async () => {
+		await read(shot("paste-1.png"), ctx({ key: "d" }));
+		assert.ok(status.get("permissions-stfu")?.endsWith(`stfu pi on ${clipboard.replace(home, "~")}/**`));
+		await run("reset");
+		assert.equal(status.get("permissions-stfu"), undefined);
+	});
+
+	describe("/permissions stfu removes one grant", () => {
+		const grantBoth = async () => {
+			await read(shot("paste-1.png"), ctx({ key: "d" }));
+			await call("edit", { path: path.join(project, "a.ts"), edits: [] }, ctx({ key: "a" }));
+		};
+
+		const grants = async () => {
+			await run("");
+
+			return lastCard().data.grants;
+		};
+
+		it("picks it from a list", async () => {
+			await grantBoth();
+			await run("stfu", ctx({ selectIndex: 0 }));
+			assert.deepEqual(await grants(), [`stfu pi on ${project.replace(home, "~")}/`]);
+			assert.ok(status.get("permissions-stfu")?.endsWith(`stfu pi on ${project.replace(home, "~")}/`));
+			assert.ok(blocked(await read(shot("paste-2.png"), ctx({ key: "n" }))), "the removed grant no longer covers");
+		});
+
+		it("takes the folder as an argument, in ~ form too", async () => {
+			await grantBoth();
+			await run(`stfu ${project.replace(home, "~")}`);
+			assert.deepEqual(await grants(), [`stfu pi on ${clipboard.replace(home, "~")}/ and subfolders`]);
+		});
+
+		it("completes the folders that have a grant", async () => {
+			await grantBoth();
+
+			const values = registered(commands, "permissions")
+				.getArgumentCompletions("stfu ")
+				.map((i) => i.value);
+
+			assert.ok(values.includes(`stfu ${shortPath(project)}`));
+		});
+
+		it("says so when there is nothing to remove", async () => {
+			await run("stfu");
+			assert.equal(notes.at(-1), "No session grants");
+			await grantBoth();
+			await run("stfu ~/nowhere");
+			assert.equal(notes.at(-1), "No session grant on ~/nowhere");
+		});
 	});
 
 	it("shows grants explicitly in the /permissions card", async () => {
 		await read(shot("paste-1.png"), ctx({ key: "a" }));
 		await run("");
 		const { grants } = lastCard().data;
-		assert.deepEqual(grants, [`read: in ${clipboard.replace(home, "~")}/`]);
+		assert.deepEqual(grants, [`stfu pi on ${clipboard.replace(home, "~")}/`]);
 	});
 });
 
@@ -362,7 +505,7 @@ describe("symlinks", () => {
 
 		await run("");
 		const { grants } = lastCard().data;
-		assert.ok(grants.includes(`read: in ${real.replace(home, "~")}/`));
+		assert.ok(grants.includes(`stfu pi on ${real.replace(home, "~")}/`));
 	});
 });
 
@@ -381,10 +524,44 @@ describe("tell pi what to do", () => {
 	});
 
 	it("works without the TUI through ui.input()", async () => {
-		const tell = ctx({ mode: "rpc", selectIndex: 2, inputText: "  try git stash  " });
+		const tell = ctx({ mode: "rpc", selectIndex: 3, inputText: "  try git stash  " });
 		assert.match(reason(await bash("git reset --hard", tell)), /instead:\ntry git stash\n/);
-		const empty = ctx({ mode: "rpc", selectIndex: 2, inputText: "" });
+		const empty = ctx({ mode: "rpc", selectIndex: 3, inputText: "" });
 		assert.match(reason(await bash("git reset --hard", empty)), /ask the user how to proceed/);
+	});
+});
+
+describe("yes, with a message", () => {
+	it("allows the call and appends the message to its result, once", async () => {
+		assert.equal(await bash("rm -rf build", ctx({ keys: ["m", ..."also clean dist", "\r"] })), undefined);
+		const changed = result();
+		assert.deepEqual(
+			changed?.content.map((c) => c.text),
+			["output", "The user approved this tool call and added a message:\nalso clean dist"],
+		);
+		assert.deepEqual(changed?.structuredContent, { ok: true }, "structured output is kept");
+		assert.equal(result(), undefined, "the message is delivered once");
+	});
+
+	it("only touches the result of the approved call", async () => {
+		await bash("rm -rf build", ctx({ keys: ["m", ..."note", "\r"] }));
+		assert.equal(result("other-call"), undefined);
+	});
+
+	it("is a plain Yes when the message is empty", async () => {
+		assert.equal(await bash("rm -rf build", ctx({ keys: ["m", "\r"] })), undefined);
+		assert.equal(result(), undefined);
+	});
+
+	it("is forgotten when the agent run ends", async () => {
+		await bash("rm -rf build", ctx({ keys: ["m", ..."note", "\r"] }));
+		await registered(handlers, "agent_end")({}, ctx());
+		assert.equal(result(), undefined);
+	});
+
+	it("works without the TUI through ui.input()", async () => {
+		assert.equal(await bash("rm -rf build", ctx({ mode: "rpc", selectIndex: 1, inputText: " note " })), undefined);
+		assert.match(result()?.content.at(-1)?.text ?? "", /message:\nnote$/);
 	});
 });
 
