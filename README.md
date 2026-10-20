@@ -9,10 +9,10 @@ Every tool call is checked against your rules before it runs: allowed calls run,
 ## Install
 
 ```sh
-pi install git:github.com/Ozmah/pi-permissions@v0.5.0
+pi install npm:@ozmah/pi-permissions@0.5.1
 ```
 
-The `@v0.5.0` tag pins the version. Without it you get the latest commit of the default branch.
+The `@0.5.1` pins the version. From git instead: `pi install git:github.com/Ozmah/pi-permissions@v0.5.1`.
 
 Create `~/.pi/agent/permissions.json` (start from [`permissions.example.json`](permissions.example.json)) and run `/reload`. Without it, every tool call asks.
 
