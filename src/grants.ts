@@ -1,9 +1,6 @@
 /**
- * "Always this session" grants. In memory only; never written to disk.
- *
- * Agents chain `cd`, pipes and inline scripts into one huge command, so a grant
- * on an exact command never matches twice. Grants are by folder instead: total
- * access to a folder lets every tool, bash included, work there for the session.
+ * Session grants, in memory only and never written to disk. A folder grant gives
+ * every tool, bash included, total access to that folder until the session ends.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -11,11 +8,13 @@ import * as path from "node:path";
 import type { JsonObject } from "./config.ts";
 import { isInside } from "./policy.ts";
 
-export type Grant =
-	/** Any input, for tools without a path (MCP and extension tools). */
-	| { kind: "tool"; tool: string }
-	/** Every tool, bash included, inside `dir` (and its subfolders when `recursive`). */
-	| { kind: "access"; dir: string; recursive: boolean };
+/**
+ * What a session grant covers.
+ *
+ * - `tool`: any input, for a tool without a path (MCP and extension tools).
+ * - `access`: every tool, bash included, inside `dir`, and its subfolders when `recursive`.
+ */
+export type Grant = { kind: "tool"; tool: string } | { kind: "access"; dir: string; recursive: boolean };
 
 export interface GrantChoice {
 	key: string;
@@ -26,14 +25,18 @@ export interface GrantChoice {
 /** Path segments kept when shortening a path for a button label. */
 const LABEL_SEGMENTS = 2;
 
+/**
+ * A call, as grants see it.
+ *
+ * - `absPath`: the resolved path, for file tools.
+ * - `dirs`: every directory a bash command may run in; undefined when that cannot be known.
+ * - `firm`: the call asks every time (an `ask` rule, a protected file, a strict rule it mentions), so no grant covers it.
+ */
 export interface CallTarget {
 	tool: string;
 	input: JsonObject;
-	/** Resolved path for file tools. */
 	absPath?: string;
-	/** Every directory a bash command may run in; undefined when that cannot be known. */
 	dirs?: string[];
-	/** Asks every time (an `ask` rule, a protected file, a mentioned strict rule): no grant covers it. */
 	firm?: boolean;
 }
 
@@ -67,7 +70,7 @@ function tooBroad(dir: string): boolean {
 	return isInside(os.homedir(), dir) || dir === path.parse(dir).root;
 }
 
-/** The folder a call works in, which is what a grant is offered for. Never home, a folder containing it, or the root. */
+/** The folder a grant is offered for, unless it is too broad. */
 function folderOf(target: CallTarget): string | undefined {
 	const folder = target.absPath ? scopeDir(target.absPath) : target.dirs?.length ? commonDir(target.dirs) : undefined;
 
@@ -131,7 +134,6 @@ export function describeGrant(grant: Grant): string {
 	return `stfu pi on ${dir}/${grant.recursive ? " and subfolders" : ""}`;
 }
 
-/** The "always" options offered for a call, each with an explicit label. */
 export function grantChoices(target: CallTarget): GrantChoice[] {
 	// A firm question is never covered by a grant, so none is offered.
 	if (target.firm) return [];
