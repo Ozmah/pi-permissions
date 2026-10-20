@@ -74,17 +74,47 @@ const CWD_CHANGERS: ReadonlySet<string> = new Set([
 	"source",
 	".",
 	"exec",
-	"export",
 	"set",
 	"shopt",
-	"unset",
-	"declare",
-	"typeset",
-	"local",
 	"alias",
 	"enable",
 	"hash",
 ]);
+
+/** Builtins that only set, export or unset variables. */
+const DECLARERS: ReadonlySet<string> = new Set(["export", "declare", "typeset", "local", "readonly", "unset"]);
+
+/** `NAME=value` or `NAME+=value`; group 1 is the name. */
+const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)\+?=/;
+
+/**
+ * What setting these variables does to later paths: `CDPATH` changes where
+ * `cd name` goes, `HOME` changes `~` and a bare `cd`. Any other variable, like
+ * the `d` in `d=$(find …)`, changes neither.
+ */
+function variablesEffect(names: readonly string[]): CdEffect {
+	if (names.includes("CDPATH")) return { kind: "unknown" };
+
+	return names.includes("HOME") ? { kind: "home" } : { kind: "none" };
+}
+
+/**
+ * `d=1`, `export NODE_ENV=test`, `local x`: setting variables reads and writes
+ * nothing. Words only: `d=1 > file` writes a file. Substitutions in a value are
+ * flagged by parseShell, and the effect of HOME or CDPATH is followed by cdEffect.
+ */
+function onlySetsVariables(tokens: Token[]): boolean {
+	const [head, ...rest] = tokens;
+
+	if (!isWord(head) || !tokens.every(isWord)) return false;
+
+	const plainName = (t: Token) =>
+		isWord(t) && /^[A-Za-z_][A-Za-z0-9_]*$/.test(ASSIGNMENT.exec(t.value)?.[1] ?? t.value);
+
+	if (DECLARERS.has(head.value)) return rest.every(plainName);
+
+	return tokens.every((t) => isWord(t) && ASSIGNMENT.test(t.value));
+}
 
 /** A path a command reads, as written. */
 export interface PathArg {
@@ -96,7 +126,8 @@ export interface PathArg {
 export type ReadonlyResult = { ok: true; paths: PathArg[] } | { ok: false; why: string };
 
 /** What a `cd` segment does to the working directory. */
-export type CdEffect = { kind: "none" } | { kind: "dir"; target: PathArg } | { kind: "unknown" };
+/** `home`: HOME was set or unset, so `~` no longer names the user's home. */
+export type CdEffect = { kind: "none" } | { kind: "dir"; target: PathArg } | { kind: "home" } | { kind: "unknown" };
 
 const isWord = (t: Token | undefined): t is Word => t?.kind === "word";
 
@@ -178,6 +209,8 @@ export function analyzeReadonly(tokens: Token[]): ReadonlyResult | undefined {
 	const [head, ...rest] = tokens;
 
 	if (!isWord(head) || head.dynamic || head.glob) return undefined;
+
+	if (onlySetsVariables(tokens)) return { ok: true, paths: [] };
 
 	if (head.value === "sed") return analyzeSed(rest);
 	const spec = COMMANDS.get(head.value);
@@ -333,7 +366,43 @@ export function cdEffect(tokens: Token[] | undefined, cdpath: string | undefined
 
 	if (!isWord(head)) return { kind: "none" };
 
-	if (head.value.includes("=") || CWD_CHANGERS.has(head.value)) return { kind: "unknown" };
+	// A command name only known at run time may be `cd`, `pushd` or `eval`.
+	if (head.dynamic || head.glob) return { kind: "unknown" };
+	const assigned = ASSIGNMENT.exec(head.value)?.[1];
+
+	if (assigned !== undefined) {
+		// Leading assignments: alone they set shell variables; before a command, only its environment.
+		const names = [assigned];
+		let i = 1;
+
+		for (; i < tokens.length; i++) {
+			const t = tokens[i];
+			const name = isWord(t) ? ASSIGNMENT.exec(t.value)?.[1] : undefined;
+
+			if (name === undefined) break;
+			names.push(name);
+		}
+
+		if (i === tokens.length) return variablesEffect(names);
+
+		return variablesEffect(names).kind === "none" ? cdEffect(tokens.slice(i), cdpath) : { kind: "unknown" };
+	}
+
+	if (DECLARERS.has(head.value)) {
+		const names: string[] = [];
+
+		for (const t of rest) {
+			const name = isWord(t) ? (ASSIGNMENT.exec(t.value)?.[1] ?? t.value) : undefined;
+
+			// Flags (`declare -n` makes a reference) and anything not a plain name are not followed.
+			if (name === undefined || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return { kind: "unknown" };
+			names.push(name);
+		}
+
+		return variablesEffect(names);
+	}
+
+	if (CWD_CHANGERS.has(head.value)) return { kind: "unknown" };
 
 	if (head.value !== "cd") return { kind: "none" };
 	const operands: Word[] = [];

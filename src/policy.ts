@@ -284,6 +284,8 @@ function judgePath(
 interface WorkingDirs {
 	dirs: string[];
 	known: boolean;
+	/** HOME was set or unset earlier in the command: `~` no longer names the user's home. */
+	homeChanged?: boolean;
 }
 
 /** A path argument resolved: `real` follows symlinks (rules use it), `requested` does not (shown to the user). */
@@ -313,7 +315,16 @@ function followCd(tokens: Token[] | undefined, wd: WorkingDirs, opts: DecideOpti
 
 	if (effect.kind === "unknown") wd.known = false;
 
+	if (effect.kind === "home") wd.homeChanged = true;
+
 	if (effect.kind !== "dir") return;
+
+	// `cd` or `cd ~` after HOME changed goes somewhere that cannot be known.
+	if (effect.target.tilde && wd.homeChanged) {
+		wd.known = false;
+
+		return;
+	}
 
 	for (const { real } of argPaths(effect.target, wd, opts.cwd)) if (!wd.dirs.includes(real)) wd.dirs.push(real);
 }
@@ -346,6 +357,9 @@ function readonlyPaths(
 
 	// Without operands, `ls`, `grep -r` or `find` read the working directory itself.
 	if (!wd.known) return { why: "the working directory is unknown after an earlier command" };
+
+	if (wd.homeChanged && paths.some((p) => p.tilde))
+		return { why: "HOME was set earlier in the command, so ~ is unknown" };
 	const resolved: ResolvedArg[] = [];
 
 	for (const arg of paths) {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Setting a variable (`d=1`, `export NODE_ENV=test`) runs as a read-only command and no longer makes the working directory unknown for the rest of the command. Only `CDPATH` and `HOME` matter: after setting `HOME`, `~` and a bare `cd` ask.
+- A command name only known at run time (`$c /etc`) makes the working directory unknown, since it may be `cd`.
 - `codemode` (default `false`): codemode scripts run without asking, since every tool they call is checked on its own. A prompt for one of those calls says it was called by codemode. When codemode asks, its script is shown as highlighted JavaScript instead of an escaped JSON string.
 
 ## 0.5.0
