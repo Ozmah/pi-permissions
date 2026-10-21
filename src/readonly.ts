@@ -88,32 +88,42 @@ const DECLARERS: ReadonlySet<string> = new Set(["export", "declare", "typeset", 
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)\+?=/;
 
 /**
- * What setting these variables does to later paths: `CDPATH` changes where
- * `cd name` goes, `HOME` changes `~` and a bare `cd`. Any other variable, like
- * the `d` in `d=$(find …)`, changes neither.
+ * A shell variable name in lowercase. Variables that steer programs (`PATH`,
+ * `LD_PRELOAD`, `GIT_PAGER`, `NODE_OPTIONS`…) are uppercase by convention, and
+ * there are too many to list: only this shape is trusted, anything else is not.
+ */
+const LOCAL_NAME = /^[a-z_][a-z0-9_]*$/;
+
+/**
+ * What setting these variables does to the rest of the command: `HOME` changes
+ * `~` and a bare `cd`; any other uppercase name may change which program runs
+ * or how it behaves, so the state is unknown. A lowercase variable, like the
+ * `d` in `d=$(find …)`, changes nothing.
  */
 function variablesEffect(names: readonly string[]): CdEffect {
-	if (names.includes("CDPATH")) return { kind: "unknown" };
+	if (names.some((n) => n !== "HOME" && !LOCAL_NAME.test(n))) return { kind: "unknown" };
 
 	return names.includes("HOME") ? { kind: "home" } : { kind: "none" };
 }
 
 /**
- * `d=1`, `export NODE_ENV=test`, `local x`: setting variables reads and writes
- * nothing. Words only: `d=1 > file` writes a file. Substitutions in a value are
- * flagged by parseShell, and the effect of HOME or CDPATH is followed by cdEffect.
+ * `d=1`, `local x`, `unset y`: setting lowercase shell variables reads and
+ * writes nothing. `export` and uppercase names reach the programs run later
+ * (`PATH=.; cat x` runs `./cat`), so they are not read-only. Words only:
+ * `d=1 > file` writes a file. Substitutions in a value are flagged by parseShell.
  */
 function onlySetsVariables(tokens: Token[]): boolean {
 	const [head, ...rest] = tokens;
 
 	if (!isWord(head) || !tokens.every(isWord)) return false;
 
-	const plainName = (t: Token) =>
-		isWord(t) && /^[A-Za-z_][A-Za-z0-9_]*$/.test(ASSIGNMENT.exec(t.value)?.[1] ?? t.value);
+	const localName = (t: Token) => isWord(t) && LOCAL_NAME.test(ASSIGNMENT.exec(t.value)?.[1] ?? t.value);
 
-	if (DECLARERS.has(head.value)) return rest.every(plainName);
+	if (head.value === "export") return false;
 
-	return tokens.every((t) => isWord(t) && ASSIGNMENT.test(t.value));
+	if (DECLARERS.has(head.value)) return rest.every(localName);
+
+	return tokens.every((t) => isWord(t) && ASSIGNMENT.test(t.value) && localName(t));
 }
 
 /** A path a command reads, as written. */
@@ -385,7 +395,9 @@ export function cdEffect(tokens: Token[] | undefined, cdpath: string | undefined
 
 		if (i === tokens.length) return variablesEffect(names);
 
-		return variablesEffect(names).kind === "none" ? cdEffect(tokens.slice(i), cdpath) : { kind: "unknown" };
+		const steersCd = names.includes("CDPATH") || names.includes("HOME");
+
+		return steersCd ? { kind: "unknown" } : cdEffect(tokens.slice(i), cdpath);
 	}
 
 	if (DECLARERS.has(head.value)) {

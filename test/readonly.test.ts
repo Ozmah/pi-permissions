@@ -234,7 +234,7 @@ describe("cdEffect", () => {
 		assert.equal(effect("cd ./src", "/etc").kind, "dir", "CDPATH is not used for ./ paths");
 	});
 
-	it("follows assignments: only CDPATH and HOME matter for later paths", () => {
+	it("follows assignments: HOME is followed, other uppercase names lose track", () => {
 		for (const text of ["d=1", "export d=1 e", "local x", "FOO=1 grep x"]) {
 			assert.deepEqual(effect(text), { kind: "none" }, text);
 		}
@@ -243,7 +243,16 @@ describe("cdEffect", () => {
 			assert.deepEqual(effect(text), { kind: "home" }, text);
 		}
 
-		for (const text of ["CDPATH=/", "export CDPATH=/", "declare -n x=y", "export $x=1", "CDPATH=/ cd etc"]) {
+		for (const text of [
+			"CDPATH=/",
+			"export CDPATH=/",
+			"declare -n x=y",
+			"export $x=1",
+			"CDPATH=/ cd etc",
+			"PATH=.",
+			"export LD_PRELOAD=./x.so",
+			"HOME=/x PATH=.",
+		]) {
 			assert.equal(effect(text).kind, "unknown", text);
 		}
 
@@ -288,12 +297,27 @@ describe("decide: read-only commands", () => {
 
 	it("keeps track of the directory across assignments that do not touch it", () => {
 		assert.equal(action("d=1; sed -n 1,5p a.ts; cat b.ts | head -5"), "allow");
-		assert.equal(action("export NODE_ENV=test && cat package.json"), "allow");
+		assert.equal(action("local x; unset y; cat b.ts"), "allow");
 	});
 
-	it("takes setting variables as harmless, but not a redirection in it", () => {
+	it("asks when a variable may change which program runs or how", () => {
+		for (const command of [
+			"PATH=.; cat README.md",
+			"export LD_PRELOAD=./x.so && cat package.json",
+			"export RIPGREP_CONFIG_PATH=./rgrc && rg foo",
+			"GIT_PAGER=./evil; git log",
+			"export NODE_ENV=test && cat package.json",
+			"export d=1 && cat package.json",
+		]) {
+			assert.equal(action(command), "ask", command);
+		}
+	});
+
+	it("takes setting lowercase variables as harmless, but not a redirection in it", () => {
 		assert.deepEqual(analyze("d=1"), { ok: true, paths: [] });
-		assert.deepEqual(analyze("export NODE_ENV=test PATH"), { ok: true, paths: [] });
+		assert.deepEqual(analyze("local x y=1"), { ok: true, paths: [] });
+		assert.equal(analyze("PATH=.")?.ok, undefined, "uppercase names are not trusted");
+		assert.equal(analyze("export d=1")?.ok, undefined, "export reaches later programs");
 		assert.notEqual(analyze("d=1 > out")?.ok, true, "a redirection writes a file");
 		assert.equal(analyze("export -n x")?.ok, undefined, "flags are not followed");
 	});
