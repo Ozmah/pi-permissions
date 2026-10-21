@@ -67,6 +67,18 @@ describe("tokenize", () => {
 		}
 	});
 
+	it("marks assignments only when bash parses them as such", () => {
+		const assigns = (text: string) => {
+			const [w] = tokenize(text) ?? [];
+
+			return w?.kind === "word" ? w.assigns : undefined;
+		};
+
+		for (const text of ["d=1", `d="1"`, "d='a b'", "d+=1", `d=\\x`]) assert.equal(assigns(text), "d", text);
+
+		for (const text of [`"d=1"`, "'d'=1", `d\\=1`, `"d"=1`, "d", "=1"]) assert.equal(assigns(text), undefined, text);
+	});
+
 	it("treats ~user as dynamic", () => {
 		const [, w] = tokenize("cat ~root/x") ?? [];
 		assert.ok(w?.kind === "word" && w.dynamic);
@@ -308,6 +320,7 @@ describe("decide: read-only commands", () => {
 			"GIT_PAGER=./evil; git log",
 			"export NODE_ENV=test && cat package.json",
 			"export d=1 && cat package.json",
+			`"d=1"; cat package.json`,
 		]) {
 			assert.equal(action(command), "ask", command);
 		}
@@ -316,6 +329,9 @@ describe("decide: read-only commands", () => {
 	it("takes setting lowercase variables as harmless, but not a redirection in it", () => {
 		assert.deepEqual(analyze("d=1"), { ok: true, paths: [] });
 		assert.deepEqual(analyze("local x y=1"), { ok: true, paths: [] });
+		assert.deepEqual(analyze(`d="a b"`), { ok: true, paths: [] });
+		assert.equal(analyze(`"d=1"`)?.ok, undefined, "a quoted name is a command, not an assignment");
+		assert.equal(analyze(`d\\=1`)?.ok, undefined, "an escaped = is a command too");
 		assert.equal(analyze("PATH=.")?.ok, undefined, "uppercase names are not trusted");
 		assert.equal(analyze("export d=1")?.ok, undefined, "export reaches later programs");
 		assert.notEqual(analyze("d=1 > out")?.ok, true, "a redirection writes a file");

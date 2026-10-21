@@ -84,7 +84,7 @@ const CWD_CHANGERS: ReadonlySet<string> = new Set([
 /** Builtins that only set, export or unset variables. */
 const DECLARERS: ReadonlySet<string> = new Set(["export", "declare", "typeset", "local", "readonly", "unset"]);
 
-/** `NAME=value` or `NAME+=value`; group 1 is the name. */
+/** A `declare`-style argument `NAME=value` or `NAME+=value`, quotes removed; group 1 is the name. */
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)\+?=/;
 
 /**
@@ -123,7 +123,7 @@ function onlySetsVariables(tokens: Token[]): boolean {
 
 	if (DECLARERS.has(head.value)) return rest.every(localName);
 
-	return tokens.every((t) => isWord(t) && ASSIGNMENT.test(t.value) && localName(t));
+	return tokens.every((t) => isWord(t) && t.assigns !== undefined && LOCAL_NAME.test(t.assigns));
 }
 
 /** A path a command reads, as written. */
@@ -378,7 +378,7 @@ export function cdEffect(tokens: Token[] | undefined, cdpath: string | undefined
 
 	// A command name only known at run time may be `cd`, `pushd` or `eval`.
 	if (head.dynamic || head.glob) return { kind: "unknown" };
-	const assigned = ASSIGNMENT.exec(head.value)?.[1];
+	const assigned = head.assigns;
 
 	if (assigned !== undefined) {
 		// Leading assignments: alone they set shell variables; before a command, only its environment.
@@ -387,7 +387,7 @@ export function cdEffect(tokens: Token[] | undefined, cdpath: string | undefined
 
 		for (; i < tokens.length; i++) {
 			const t = tokens[i];
-			const name = isWord(t) ? ASSIGNMENT.exec(t.value)?.[1] : undefined;
+			const name = isWord(t) ? t.assigns : undefined;
 
 			if (name === undefined) break;
 			names.push(name);
