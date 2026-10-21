@@ -102,7 +102,9 @@ With `readonly` on, a segment that only reads runs when every path it reads is i
 
 ### codemode
 
-A `codemode` script runs JavaScript in a sandbox with no file system or network, and acts only through the tools it calls. Pi sends each of those calls through the same check as a call from the model, so with `"codemode": true` the script runs without asking and its calls ask, run or block on their own. A prompt for one of them says where it comes from: `write requires permission (called by codemode)`. A `tools` rule on `codemode` still wins.
+A `codemode` script runs JavaScript in a sandbox with no file system or network, and acts through the tools it calls and Pi's `models`. Pi sends each tool call through the same check as a call from the model, so with `"codemode": true` the script runs without asking and its calls ask, run or block on their own. A prompt for one of them says where it comes from: `write requires permission (called by codemode)`. A `tools` rule on `codemode` still wins.
+
+`models.classify()` and `models.generateImages()` are not tool calls and no extension sees them: they run with the session's credentials, add to its cost, and send the script's data to that provider. With `"codemode": true` they run without asking, as they would without this extension.
 
 When `codemode` asks, the prompt shows the script as JavaScript, labeled and highlighted, instead of an escaped JSON string.
 
