@@ -1,21 +1,21 @@
 /**
- * Inline scripts: code an interpreter runs straight from the command line,
- * through a flag (`python3 -c "…"`) or stdin from a here-document (`python3 - <<'EOF'`).
- *
- * Display only, never part of the decision: a script is arbitrary code and always
- * goes through the bash rules. This knows interpreter arguments, not languages:
- * the code is shown and highlighted, never interpreted.
+ * Inline scripts: code an interpreter runs from a flag (`python3 -c "…"`) or a here-document (`python3 - <<'EOF'`).
+ * Display only: a script is arbitrary code, always decided by the bash rules, and its code is never parsed.
  */
 import { type Segment, type Word, tokenize } from "./shell.ts";
 
+/**
+ * How an interpreter takes inline code.
+ *
+ * - `name`: shown to the user ("Python").
+ * - `language`: the highlighter's language id.
+ * - `codeFlags`: flags whose next word is the code.
+ * - `stdinFlags`: flags that make it read the script from stdin; `-` always does.
+ */
 interface Interpreter {
-	/** Name shown to the user. */
 	name: string;
-	/** Highlighter language id. */
 	language: string;
-	/** Flags whose next word is the code. */
 	codeFlags: readonly string[];
-	/** Flags that make it read the script from stdin. `-` always does. */
 	stdinFlags?: readonly string[];
 }
 
@@ -34,12 +34,11 @@ const INTERPRETERS: ReadonlyMap<string, Interpreter> = new Map([
 	["php", { name: "PHP", language: "php", codeFlags: ["-r"] }],
 ]);
 
+/** An interpreter's inline code; `name` is for the user ("Python"). */
 export interface InlineScript {
-	/** Interpreter name for the user, e.g. "Python". */
 	name: string;
 	language: string;
 	code: string;
-	/** Where the code comes from. */
 	from: "heredoc" | "argument";
 }
 
@@ -48,7 +47,6 @@ function interpreterOf(command: string): Interpreter | undefined {
 	return INTERPRETERS.get(command.replace(/^(python3?)(\.\d+)*$/, "$1"));
 }
 
-/** The script a segment runs inline, if any. */
 export function inlineScript(segment: Segment): InlineScript | undefined {
 	const tokens = tokenize(segment.text);
 	const [head, ...rest] = tokens ?? [];

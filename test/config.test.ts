@@ -57,6 +57,14 @@ describe("parseConfig", () => {
 		assert.match(errors[0], /default, external_directory, bash: old format/);
 	});
 
+	it("accepts codemode as a boolean, reported otherwise", () => {
+		const errors: string[] = [];
+		assert.equal(parseConfig({ codemode: true }, "f", errors).codemode, true);
+		assert.equal(parseConfig({ codemode: "yes" }, "f", errors).codemode, undefined);
+		assert.equal(errors.length, 1);
+		assert.equal(mergeConfigs().codemode, false, "off by default");
+	});
+
 	it("rejects a non-object root", () => {
 		const errors: string[] = [];
 		assert.deepEqual(parseConfig([1], "f", errors), {});

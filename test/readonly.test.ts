@@ -67,6 +67,18 @@ describe("tokenize", () => {
 		}
 	});
 
+	it("marks assignments only when bash parses them as such", () => {
+		const assigns = (text: string) => {
+			const [w] = tokenize(text) ?? [];
+
+			return w?.kind === "word" ? w.assigns : undefined;
+		};
+
+		for (const text of ["d=1", `d="1"`, "d='a b'", "d+=1", `d=\\x`]) assert.equal(assigns(text), "d", text);
+
+		for (const text of [`"d=1"`, "'d'=1", `d\\=1`, `"d"=1`, "d", "=1"]) assert.equal(assigns(text), undefined, text);
+	});
+
 	it("treats ~user as dynamic", () => {
 		const [, w] = tokenize("cat ~root/x") ?? [];
 		assert.ok(w?.kind === "word" && w.dynamic);
@@ -234,6 +246,36 @@ describe("cdEffect", () => {
 		assert.equal(effect("cd ./src", "/etc").kind, "dir", "CDPATH is not used for ./ paths");
 	});
 
+	it("follows assignments: HOME is followed, other uppercase names lose track", () => {
+		for (const text of ["d=1", "export d=1 e", "local x", "FOO=1 grep x"]) {
+			assert.deepEqual(effect(text), { kind: "none" }, text);
+		}
+
+		for (const text of ["HOME=/etc", "export HOME=/x", "unset HOME"]) {
+			assert.deepEqual(effect(text), { kind: "home" }, text);
+		}
+
+		for (const text of [
+			"CDPATH=/",
+			"export CDPATH=/",
+			"declare -n x=y",
+			"export $x=1",
+			"CDPATH=/ cd etc",
+			"PATH=.",
+			"export LD_PRELOAD=./x.so",
+			"HOME=/x PATH=.",
+		]) {
+			assert.equal(effect(text).kind, "unknown", text);
+		}
+
+		assert.deepEqual(effect("FOO=1 cd /etc"), { kind: "dir", target: { value: "/etc", tilde: false } });
+	});
+
+	it("loses track of a command name only known at run time, which may be cd", () => {
+		assert.equal(effect("$c /etc").kind, "unknown");
+		assert.equal(effect('"$c" /etc').kind, "unknown");
+	});
+
 	it("leaves other commands alone", () => {
 		assert.deepEqual(effect("grep x"), { kind: "none" });
 	});
@@ -263,6 +305,47 @@ describe("decide: read-only commands", () => {
 		]) {
 			assert.equal(action(command), "ask", command);
 		}
+	});
+
+	it("keeps track of the directory across assignments that do not touch it", () => {
+		assert.equal(action("d=1; sed -n 1,5p a.ts; cat b.ts | head -5"), "allow");
+		assert.equal(action("local x; unset y; cat b.ts"), "allow");
+	});
+
+	it("asks when a variable may change which program runs or how", () => {
+		for (const command of [
+			"PATH=.; cat README.md",
+			"export LD_PRELOAD=./x.so && cat package.json",
+			"export RIPGREP_CONFIG_PATH=./rgrc && rg foo",
+			"GIT_PAGER=./evil; git log",
+			"export NODE_ENV=test && cat package.json",
+			"export d=1 && cat package.json",
+			`"d=1"; cat package.json`,
+		]) {
+			assert.equal(action(command), "ask", command);
+		}
+	});
+
+	it("takes setting lowercase variables as harmless, but not a redirection in it", () => {
+		assert.deepEqual(analyze("d=1"), { ok: true, paths: [] });
+		assert.deepEqual(analyze("local x y=1"), { ok: true, paths: [] });
+		assert.deepEqual(analyze(`d="a b"`), { ok: true, paths: [] });
+		assert.equal(analyze(`"d=1"`)?.ok, undefined, "a quoted name is a command, not an assignment");
+		assert.equal(analyze(`d\\=1`)?.ok, undefined, "an escaped = is a command too");
+		assert.equal(analyze("PATH=.")?.ok, undefined, "uppercase names are not trusted");
+		assert.equal(analyze("export d=1")?.ok, undefined, "export reaches later programs");
+		assert.notEqual(analyze("d=1 > out")?.ok, true, "a redirection writes a file");
+		assert.equal(analyze("export -n x")?.ok, undefined, "flags are not followed");
+	});
+
+	it("asks for ~ and a bare cd once HOME was set or unset", () => {
+		for (const command of ["HOME=/etc; cat ~/passwd", "export HOME=/etc && cd && cat passwd", "unset HOME; cat ~/x"]) {
+			assert.equal(action(command), "ask", command);
+		}
+	});
+
+	it("asks after a command name only known at run time", () => {
+		assert.equal(action("c=cd; $c /etc && cat passwd"), "ask");
 	});
 
 	it("asks when a path depends on something it cannot know", () => {

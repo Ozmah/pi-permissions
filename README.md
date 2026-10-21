@@ -9,10 +9,10 @@ Every tool call is checked against your rules before it runs: allowed calls run,
 ## Install
 
 ```sh
-pi install git:github.com/Ozmah/pi-permissions@v0.5.0
+pi install npm:@ozmah/pi-permissions@0.5.1
 ```
 
-The `@v0.5.0` tag pins the version. Without it you get the latest commit of the default branch.
+The `@0.5.1` pins the version. From git instead: `pi install git:github.com/Ozmah/pi-permissions@v0.5.1`.
 
 Create `~/.pi/agent/permissions.json` (start from [`permissions.example.json`](permissions.example.json)) and run `/reload`. Without it, every tool call asks.
 
@@ -53,6 +53,7 @@ Rules list what must not happen. Anything without a rule asks, and a "stfu pi" g
 | `paths`                | Paths that any tool reads or writes: file tools, and the files read-only bash commands read.              |
 | `tools`                | Tools by name: `read`, `write`, `edit`, `ls`, `find`, `grep`, MCP and extension tools.                    |
 | `readonly`             | Reads inside the project run without asking, with file tools and read-only bash commands. Default `true`. |
+| `codemode`             | `codemode` runs without asking, and every tool its script calls is checked on its own. Default `false`.   |
 | `ui.position`          | `editor` (replaces the input), `center` or `top`.                                                         |
 | `ui.describe_commands` | Asks the agent to describe each bash command in a few words, shown in the prompt. Default `false`.        |
 
@@ -96,8 +97,16 @@ With `readonly` on, a segment that only reads runs when every path it reads is i
 - `sed` counts only as `sed -n` with a script that prints line ranges (`5p`, `1,60p`, `$p`, `10,$p`), given as the first operand or with `-e`. `-i`, `-f` and any other script ask: `w` writes, `e` runs commands and `r` reads other files.
 - Flags that write, run programs or follow symlinks disqualify the segment: `find -exec/-delete/-fprint/-L`, `rg --pre/-L`, `grep -R`, `sort -o`, `tail -f`, `uniq in out`. Abbreviated long flags count as the flag they abbreviate (`sort --o=file` is `sort --output=file`), as GNU tools accept them. Output redirections other than `/dev/null` or an fd disqualify it too.
 - Every operand is checked as a path, patterns included. `grep "/api" src` asks for `/api` when it is outside the project. A wrong guess can only add a prompt, and the reason marks an operand that is no file as "no such file, checked as a path". Input redirections (`< file`) are checked too, and a here-document or here-string feeding a read-only command is plain input.
-- `cd` is followed: later relative paths are checked against every directory the command may be in. `cd -`, `cd $VAR`, `pushd`, `builtin`, `eval`, assignments, and `cd name` with `$CDPATH` set lose track, and later relative paths ask.
+- `cd` is followed: later relative paths are checked against every directory the command may be in. `cd -`, `cd $VAR`, `pushd`, `builtin`, `eval`, a command name only known at run time (`$c`), and `cd name` with `$CDPATH` set lose track, and later relative paths ask. Setting a lowercase shell variable (`d=1`, `local x`) reads and writes nothing and keeps the track. `export` and uppercase names (`PATH=.`, `LD_PRELOAD`, `GIT_PAGER`) may change which program runs later or how, so they ask and lose track; after `HOME`, `~` and a bare `cd` ask.
 - Variables, `~user`, subshells, brace expansion and comments are not resolved, so the segment asks. A glob is checked by its fixed directory (`src/*.ts` → `src`). `..` after a wildcard asks, and so does a wildcard component that starts with a dot (`.*`, `.?`), which bash before 5.2 can expand to `..`.
+
+### codemode
+
+A `codemode` script runs JavaScript in a sandbox with no file system or network, and acts through the tools it calls and Pi's `models`. Pi sends each tool call through the same check as a call from the model, so with `"codemode": true` the script runs without asking and its calls ask, run or block on their own. A prompt for one of them says where it comes from: `write requires permission (called by codemode)`. A `tools` rule on `codemode` still wins.
+
+`models.classify()` and `models.generateImages()` are not tool calls and no extension sees them: they run with the session's credentials, add to its cost, and send the script's data to that provider. With `"codemode": true` they run without asking, as they would without this extension.
+
+When `codemode` asks, the prompt shows the script as JavaScript, labeled and highlighted, instead of an escaped JSON string.
 
 ### Command descriptions
 

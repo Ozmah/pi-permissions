@@ -2,7 +2,7 @@
  * Builds the prompt body for a tool call. The body is unbounded; the prompt scrolls it.
  */
 import { type Json, type JsonObject, isJsonObject, isNumber, isString } from "./config.ts";
-import { formatReason, needsDecision, type Reason } from "./policy.ts";
+import { CODEMODE, formatReason, needsDecision, type Reason } from "./policy.ts";
 import { ACTION_COLOR, type BodyLine, RULE_COLOR, type Span } from "./prompt-ui.ts";
 import { inlineScript } from "./scripts.ts";
 import { displayLines, parseShell } from "./shell.ts";
@@ -64,6 +64,27 @@ function blockLines(code: string, lang: string | undefined, deps: BodyDeps): Bod
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** A codemode script as code, labeled and highlighted, instead of an escaped JSON string. */
+function codemodeBody(input: JsonObject, code: string, deps: BodyDeps): BodyLine[] {
+	const { code: _code, ...rest } = input;
+
+	const lines: BodyLine[] = [
+		heading("Script"),
+		{
+			text: `JavaScript, ${plural(code.split("\n").length, "line")}`,
+			color: "accent",
+			prefix: "  ┌ ",
+			prefixColor: "dim",
+		},
+		...blockLines(code, "javascript", deps),
+		{ text: "", prefix: "  └", prefixColor: "dim" },
+	];
+
+	if (Object.keys(rest).length) lines.push({ text: JSON.stringify(rest), color: "muted" });
+
+	return lines;
+}
 
 function bashBody(input: JsonObject, deps: BodyDeps): BodyLine[] {
 	const lines: BodyLine[] = [];
@@ -199,6 +220,8 @@ export function reasonSpans(r: Reason): Span[] {
 			return [...head, muted("read inside the project: "), action];
 		case "note":
 			return [...head, { text: "requires confirmation", color: ACTION_COLOR.ask }];
+		case "nested":
+			return [...head, muted("runs other tools, each checked on its own: "), action];
 	}
 }
 
@@ -244,6 +267,8 @@ export function buildBody(
 
 			if (Object.keys(rest).length) body.push({ text: JSON.stringify(rest), color: "muted" });
 		}
+	} else if (toolName === CODEMODE && isString(input.code)) {
+		body.push(...codemodeBody(input, input.code, deps));
 	} else {
 		body.push(heading("Input"), { text: JSON.stringify(input, null, 2), color: "muted" });
 	}

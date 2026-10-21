@@ -31,6 +31,8 @@ export interface Summary {
 	tools: RuleMap;
 	/** Reading inside the project runs without asking. */
 	readonly: boolean;
+	/** codemode runs without asking; the tools it calls are checked one by one. */
+	codemode: boolean;
 	grants: string[];
 	disabled: string[];
 	errors: string[];
@@ -75,6 +77,9 @@ export function renderSummary(s: Summary, t: SummaryTheme): string[] {
 	lines.push(`${label("Prompt")}${s.position}`);
 	lines.push(
 		`${label("Read-only")}${s.readonly ? t.fg("success", "on, reading inside the project runs") : t.fg("dim", "off")}`,
+	);
+	lines.push(
+		`${label("Codemode")}${s.codemode ? t.fg("success", "runs, each tool it calls is checked") : t.fg("dim", "asks")}`,
 	);
 	lines.push(`${label("No rule")}${t.fg("warning", "asks")}`);
 

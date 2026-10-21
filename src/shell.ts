@@ -246,7 +246,15 @@ export interface Word {
 	tilde: boolean;
 	/** Some part of it was quoted or escaped. */
 	quoted: boolean;
+	/**
+	 * The variable name when the word is an assignment as bash parses it: an
+	 * unquoted name, then `=` or `+=` (`d=1`, `d="1"`). `"d=1"` and `d\=1` are not.
+	 */
+	assigns?: string;
 }
+
+/** An unquoted `NAME=` or `NAME+=` prefix; group 1 is the name. */
+const ASSIGNMENT_PREFIX = /^([A-Za-z_][A-Za-z0-9_]*)\+?=/;
 
 /** A redirection operator, with its fd prefix: `<`, `2>`, `>>`, `&>`, `<<`, `>&`. Its target is the next word. */
 export interface Redirect {
@@ -279,6 +287,8 @@ const REDIRECT_OPS = ["<<<", "<<-", "<<", "<&", "<>", "<", ">>", ">|", ">&", ">"
 export function tokenize(text: string): Token[] | undefined {
 	const tokens: Token[] = [];
 	let word: Word | undefined;
+	// Length of the value when the current word's first quote or escape began.
+	let quotedAt = Infinity;
 
 	const current = (): Word => {
 		word ??= { kind: "word", value: "", dynamic: false, glob: false, tilde: false, quoted: false };
@@ -286,8 +296,17 @@ export function tokenize(text: string): Token[] | undefined {
 		return word;
 	};
 
+	const quote = (w: Word) => {
+		if (!w.quoted) quotedAt = w.value.length;
+		w.quoted = true;
+	};
+
 	const end = () => {
 		if (!word) return;
+		const prefix = ASSIGNMENT_PREFIX.exec(word.value);
+
+		if (prefix && prefix[0].length <= quotedAt) word.assigns = prefix[1];
+		quotedAt = Infinity;
 
 		// `~user`, `~+`, `~-` expand to directories that cannot be known here.
 		if (word.tilde && word.value !== "~" && !word.value.startsWith("~/")) word.dynamic = true;
@@ -303,15 +322,15 @@ export function tokenize(text: string): Token[] | undefined {
 
 			if (close < 0) return undefined;
 			const w = current();
+			quote(w);
 			w.value += text.slice(i + 1, close);
-			w.quoted = true;
 			i = close;
 			continue;
 		}
 
 		if (ch === '"') {
 			const w = current();
-			w.quoted = true;
+			quote(w);
 			let j = i + 1;
 
 			for (; j < text.length && text[j] !== '"'; j++) {
@@ -335,8 +354,8 @@ export function tokenize(text: string): Token[] | undefined {
 		if (ch === "\\") {
 			if (i + 1 >= text.length) return undefined;
 			const w = current();
+			quote(w);
 			w.value += text[i + 1];
-			w.quoted = true;
 			i++;
 			continue;
 		}

@@ -17,6 +17,7 @@ const base: Summary = {
 	paths: { "~/.ssh/**": "deny" },
 	tools: {},
 	readonly: true,
+	codemode: false,
 	grants: [],
 	disabled: [],
 	errors: [],
@@ -34,6 +35,12 @@ describe("renderSummary", () => {
 	it("states that anything without a rule asks, and whether reads run", () => {
 		const text = renderSummary(base, plain).join("\n");
 		assert.ok(text.includes("No rule   asks"));
+		assert.ok(text.includes("Codemode  asks"));
+		assert.ok(
+			renderSummary({ ...base, codemode: true }, plain)
+				.join("\n")
+				.includes("Codemode  runs, each tool it calls is checked"),
+		);
 		assert.ok(text.includes("Read-only on, reading inside the project runs"));
 	});
 

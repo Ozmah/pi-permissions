@@ -178,10 +178,13 @@ export default function (pi: ExtensionAPI) {
 
 	/** Messages from "Yes, with a message", by tool call id, until the call's result arrives. */
 	const messages = new Map<string, string>();
+	/** Tool name by call id, so a call made from a script (codemode) can say which tool issued it. */
+	const callNames = new Map<string, string>();
 
 	pi.on("session_start", async (_event, ctx) => {
 		sessionGrants = [];
 		messages.clear();
+		callNames.clear();
 		sessionOff.clear();
 		const errors: string[] = [];
 		updateStatus(ctx, offMode(projectDir(ctx), errors));
@@ -203,9 +206,13 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// A call blocked after approval (e.g. by another extension) never reaches tool_result.
-	pi.on("agent_end", () => messages.clear());
+	pi.on("agent_end", () => {
+		messages.clear();
+		callNames.clear();
+	});
 
 	pi.on("tool_call", async (event, ctx) => {
+		callNames.set(event.toolCallId, event.toolName);
 		const cwd = projectDir(ctx);
 		const errors: string[] = [];
 
@@ -276,7 +283,9 @@ export default function (pi: ExtensionAPI) {
 		const reasons = [...uncovered, ...d.reasons];
 		const body = buildBody(event.toolName, input, d.absPath, reasons, bodyDeps(ctx.ui.theme), d.requestedPath);
 		const choices = grantChoices(target);
-		const choice = await ask(ctx, `🔐 ${event.toolName} requires permission`, body, cfg.ui.position, choices);
+		const parent = event.parentToolCallId && (callNames.get(event.parentToolCallId) ?? "another tool");
+		const title = `🔐 ${event.toolName} requires permission${parent ? ` (called by ${parent})` : ""}`;
+		const choice = await ask(ctx, title, body, cfg.ui.position, choices);
 
 		if (choice.key === NO.key) return { block: true, reason: DENIED_REASON };
 
@@ -378,6 +387,7 @@ export default function (pi: ExtensionAPI) {
 			paths: cfg.paths,
 			tools: cfg.tools,
 			readonly: cfg.readonly,
+			codemode: cfg.codemode,
 			grants: sessionGrants.map(describeGrant),
 			disabled,
 			errors: [...errors, ...configErrors],

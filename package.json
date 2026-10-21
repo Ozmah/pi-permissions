@@ -1,12 +1,16 @@
 {
-  "name": "pi-permissions",
-  "version": "0.5.0",
+  "name": "@ozmah/pi-permissions",
+  "version": "0.5.1",
   "description": "Permission prompts for Pi, for the slightly paranoid.",
   "keywords": [
     "permissions",
     "pi",
     "pi-package"
   ],
+  "homepage": "https://github.com/Ozmah/pi-permissions#readme",
+  "bugs": {
+    "url": "https://github.com/Ozmah/pi-permissions/issues"
+  },
   "license": "MIT",
   "author": "Ozmah (https://ozmah.dev)",
   "repository": {
@@ -21,6 +25,9 @@
     "LICENSE"
   ],
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "test": "node --test \"test/*.test.ts\"",
     "typecheck": "tsc --noEmit",

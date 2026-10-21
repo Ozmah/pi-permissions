@@ -42,6 +42,8 @@ interface ToolEvent {
 	toolCallId: string;
 	toolName: string;
 	input: JsonObject;
+	/** Set when another tool (codemode) issued the call. */
+	parentToolCallId?: string;
 }
 
 /** A tool's output, as the tool_result handler sees and returns it. */
@@ -260,6 +262,33 @@ describe("tool calls", () => {
 		assert.equal(await call("mcp__x", {}, c), undefined);
 		assert.ok(!offered.join("").includes("Always:"), "no any-input option is offered");
 		assert.ok(blocked(await call("mcp__x", {}, ctx({ key: "n" }))), "the next call still asks");
+	});
+
+	it("names the tool that issued a call made from a script", async () => {
+		writeConfig({ codemode: true });
+		assert.equal(await call("codemode", { code: "return 1" }, ctx(), "cm-1"), undefined, "codemode itself runs");
+
+		let rendered = "";
+		const c = ctx({ key: "n" });
+		const custom = c.ui.custom;
+
+		c.ui.custom = (factory, options) =>
+			custom((host, th, kb, done) => {
+				const component = factory(host, th, kb, done);
+				rendered = component.render(200).join("\n");
+
+				return component;
+			}, options);
+
+		const nested = {
+			toolCallId: "cm-1/1",
+			parentToolCallId: "cm-1",
+			toolName: "write",
+			input: { path: "x.ts", content: "" },
+		};
+
+		assert.ok(blocked(await registered(handlers, "tool_call")(nested, c)), "the nested write is checked on its own");
+		assert.ok(rendered.includes("write requires permission (called by codemode)"));
 	});
 
 	it("an ask rule asks even with a stfu grant", async () => {

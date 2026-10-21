@@ -402,6 +402,28 @@ describe("buildBody", () => {
 		assert.deepEqual(why, [formatReason(reasons[1]), `2 allowed: "cd x", "grep a b"`]);
 	});
 
+	it("shows a codemode script as highlighted code instead of escaped JSON", () => {
+		const langs: string[] = [];
+
+		const highlight = (code: string, lang: string) => {
+			langs.push(lang);
+
+			return code.split("\n");
+		};
+
+		const code = 'const r = await tools.read({ path: "a.ts" });\nreturn r;';
+		const body = buildBody("codemode", { code }, undefined, [], { highlight });
+		const block = body.map((l) => `${l.prefix ?? ""}${l.text}`);
+		assert.deepEqual(block.slice(0, 5), [
+			"Script",
+			"  ┌ JavaScript, 2 lines",
+			'  │ const r = await tools.read({ path: "a.ts" });',
+			"  │ return r;",
+			"  └",
+		]);
+		assert.ok(langs.includes("javascript"));
+	});
+
 	it("shows an edit as a diff", () => {
 		const body = buildBody("edit", { path: "x", edits: [{ oldText: "a", newText: "b" }] }, "/p/x", []);
 		const diff = body.filter((l) => l.prefix === "- " || l.prefix === "+ ").map((l) => `${l.prefix}${l.text}`);

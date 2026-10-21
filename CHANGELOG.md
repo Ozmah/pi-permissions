@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1
+
+- Published to npm as `@ozmah/pi-permissions`: `pi install npm:@ozmah/pi-permissions`.
+- Setting a lowercase shell variable (`d=1`, `local x`) runs as a read-only command and no longer makes the working directory unknown for the rest of the command. `export` and uppercase names still ask and lose track: they may change which program runs later (`PATH=.; cat x` runs `./cat`) or how (`LD_PRELOAD`, `GIT_PAGER`). After setting `HOME`, `~` and a bare `cd` ask.
+- A command name only known at run time (`$c /etc`) makes the working directory unknown, since it may be `cd`.
+- `codemode` (default `false`): codemode scripts run without asking, since every tool they call is checked on its own. A prompt for one of those calls says it was called by codemode. When codemode asks, its script is shown as highlighted JavaScript instead of an escaped JSON string.
+
 ## 0.5.0
 
 The config format changed and the old one is ignored. Rules now list what must not happen (`halt`, `deny`, `ask`), anything without a rule asks, and "stfu pi" grants silence the prompts for a folder you trust. Read the Configuration section of the README before upgrading.

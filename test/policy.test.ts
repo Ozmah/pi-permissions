@@ -167,6 +167,19 @@ describe("decide: the safety net for strict rules mentioned anywhere", () => {
 	});
 });
 
+describe("decide: codemode", () => {
+	it("asks without the mode, runs with it, and lets a tools rule win", () => {
+		assert.equal(decide(mergeConfigs(), "codemode", { code: "x" }, { cwd }).action, "ask");
+
+		const on = decide(mergeConfigs({ codemode: true }), "codemode", { code: "x" }, { cwd });
+		assert.equal(on.action, "allow");
+		assert.deepEqual(on.reasons.map(formatReason), ["codemode → runs other tools, each checked on its own: allow"]);
+
+		const denied = mergeConfigs({ codemode: true, tools: { codemode: "deny" } });
+		assert.equal(decide(denied, "codemode", { code: "x" }, { cwd }).action, "deny");
+	});
+});
+
 describe("decide: comments hide nothing", () => {
 	it("asks for a command after a comment that holds << or a quote", () => {
 		assert.equal(action("bash", { command: "git status # <<EOF\nrm -rf ~\nEOF" }), "ask");
